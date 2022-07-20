@@ -78,6 +78,10 @@ if test "@host_os@" = darwin; then
   BREW=no
 fi
 
+if test -z "$enable_lto" && test -n "@lto@"; then
+  enable_lto=yes
+fi
+
 PKG_CONFIG="$(which pkg-config) --static"
 
 # These two need to remain exported because pkg-config does not see them
@@ -101,7 +105,7 @@ PYTHONPATH="${depends_prefix}/native/lib/python3/dist-packages${PYTHONPATH:+${PA
 
 if test -n "@AR@"; then
   AR="@AR@"
-  ac_cv_path_ac_pt_AR="${AR}"
+  ac_cv_path_AR="${AR}"
 fi
 
 if test -n "@RANLIB@"; then
@@ -122,17 +126,17 @@ fi
 if test "@host_os@" = darwin; then
   if test -n "@OTOOL@"; then
     OTOOL="@OTOOL@"
-    ac_cv_path_ac_pt_OTOOL="${OTOOL}"
+    ac_cv_path_OTOOL="${OTOOL}"
   fi
 
   if test -n "@INSTALL_NAME_TOOL@"; then
     INSTALL_NAME_TOOL="@INSTALL_NAME_TOOL@"
-    ac_cv_path_ac_pt_INSTALL_NAME_TOOL="${INSTALL_NAME_TOOL}"
+    ac_cv_path_INSTALL_NAME_TOOL="${INSTALL_NAME_TOOL}"
   fi
 
   if test -n "@DSYMUTIL@"; then
     DSYMUTIL="@DSYMUTIL@"
-    ac_cv_path_ac_pt_DSYMUTIL="${DSYMUTIL}"
+    ac_cv_path_DSYMUTIL="${DSYMUTIL}"
   fi
 fi
 

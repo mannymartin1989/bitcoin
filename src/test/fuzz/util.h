@@ -55,13 +55,15 @@ public:
 
     FuzzedSock& operator=(Sock&& other) override;
 
-    void Reset() override;
-
     ssize_t Send(const void* data, size_t len, int flags) const override;
 
     ssize_t Recv(void* buf, size_t len, int flags) const override;
 
     int Connect(const sockaddr*, socklen_t) const override;
+
+    int Bind(const sockaddr*, socklen_t) const override;
+
+    int Listen(int backlog) const override;
 
     std::unique_ptr<Sock> Accept(sockaddr* addr, socklen_t* addr_len) const override;
 
@@ -69,7 +71,11 @@ public:
 
     int SetSockOpt(int level, int opt_name, const void* opt_val, socklen_t opt_len) const override;
 
+    int GetSockName(sockaddr* name, socklen_t* name_len) const override;
+
     bool Wait(std::chrono::milliseconds timeout, Event requested, Event* occurred = nullptr) const override;
+
+    bool WaitMany(std::chrono::milliseconds timeout, EventsPerSock& events_per_sock) const override;
 
     bool IsConnected(std::string& errmsg) const override;
 };
@@ -290,7 +296,6 @@ template <bool ReturnUniquePtr = false>
 auto ConsumeNode(FuzzedDataProvider& fuzzed_data_provider, const std::optional<NodeId>& node_id_in = std::nullopt) noexcept
 {
     const NodeId node_id = node_id_in.value_or(fuzzed_data_provider.ConsumeIntegralInRange<NodeId>(0, std::numeric_limits<NodeId>::max()));
-    const ServiceFlags local_services = ConsumeWeakEnum(fuzzed_data_provider, ALL_SERVICE_FLAGS);
     const auto sock = std::make_shared<FuzzedSock>(fuzzed_data_provider);
     const CAddress address = ConsumeAddress(fuzzed_data_provider);
     const uint64_t keyed_net_group = fuzzed_data_provider.ConsumeIntegral<uint64_t>();
@@ -301,7 +306,6 @@ auto ConsumeNode(FuzzedDataProvider& fuzzed_data_provider, const std::optional<N
     const bool inbound_onion{conn_type == ConnectionType::INBOUND ? fuzzed_data_provider.ConsumeBool() : false};
     if constexpr (ReturnUniquePtr) {
         return std::make_unique<CNode>(node_id,
-                                       local_services,
                                        sock,
                                        address,
                                        keyed_net_group,
@@ -312,7 +316,6 @@ auto ConsumeNode(FuzzedDataProvider& fuzzed_data_provider, const std::optional<N
                                        inbound_onion);
     } else {
         return CNode{node_id,
-                     local_services,
                      sock,
                      address,
                      keyed_net_group,
@@ -325,7 +328,7 @@ auto ConsumeNode(FuzzedDataProvider& fuzzed_data_provider, const std::optional<N
 }
 inline std::unique_ptr<CNode> ConsumeNodeAsUniquePtr(FuzzedDataProvider& fdp, const std::optional<NodeId>& node_id_in = std::nullopt) { return ConsumeNode<true>(fdp, node_id_in); }
 
-void FillNode(FuzzedDataProvider& fuzzed_data_provider, ConnmanTestMsg& connman, PeerManager& peerman, CNode& node) noexcept;
+void FillNode(FuzzedDataProvider& fuzzed_data_provider, ConnmanTestMsg& connman, CNode& node) noexcept;
 
 class FuzzedFileProvider
 {

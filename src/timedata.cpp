@@ -9,14 +9,14 @@
 #include <timedata.h>
 
 #include <netaddress.h>
-#include <node/ui_interface.h>
+#include <node/interface_ui.h>
 #include <sync.h>
 #include <tinyformat.h>
 #include <util/system.h>
 #include <util/translation.h>
 #include <warnings.h>
 
-static Mutex g_timeoffset_mutex;
+static GlobalMutex g_timeoffset_mutex;
 static int64_t nTimeOffset GUARDED_BY(g_timeoffset_mutex) = 0;
 
 /**

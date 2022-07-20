@@ -21,6 +21,7 @@
 #include <node/blockstorage.h>
 #include <policy/feerate.h>
 #include <policy/packages.h>
+#include <policy/policy.h>
 #include <script/script_error.h>
 #include <sync.h>
 #include <txdb.h>
@@ -58,26 +59,6 @@ namespace Consensus {
 struct Params;
 } // namespace Consensus
 
-/** Default for -limitancestorcount, max number of in-mempool ancestors */
-static const unsigned int DEFAULT_ANCESTOR_LIMIT = 25;
-/** Default for -limitancestorsize, maximum kilobytes of tx + all in-mempool ancestors */
-static const unsigned int DEFAULT_ANCESTOR_SIZE_LIMIT = 101;
-/** Default for -limitdescendantcount, max number of in-mempool descendants */
-static const unsigned int DEFAULT_DESCENDANT_LIMIT = 25;
-/** Default for -limitdescendantsize, maximum kilobytes of in-mempool descendants */
-static const unsigned int DEFAULT_DESCENDANT_SIZE_LIMIT = 101;
-
-// If a package is submitted, it must be within the mempool's ancestor/descendant limits. Since a
-// submitted package must be child-with-unconfirmed-parents (all of the transactions are an ancestor
-// of the child), package limits are ultimately bounded by mempool package limits. Ensure that the
-// defaults reflect this constraint.
-static_assert(DEFAULT_DESCENDANT_LIMIT >= MAX_PACKAGE_COUNT);
-static_assert(DEFAULT_ANCESTOR_LIMIT >= MAX_PACKAGE_COUNT);
-static_assert(DEFAULT_ANCESTOR_SIZE_LIMIT >= MAX_PACKAGE_SIZE);
-static_assert(DEFAULT_DESCENDANT_SIZE_LIMIT >= MAX_PACKAGE_SIZE);
-
-/** Default for -mempoolexpiry, expiration time for mempool transactions in hours */
-static const unsigned int DEFAULT_MEMPOOL_EXPIRY = 336;
 /** Maximum number of dedicated script-checking threads allowed */
 static const int MAX_SCRIPTCHECK_THREADS = 15;
 /** -par default (number of script-checking threads, 0 = auto) */
@@ -87,8 +68,6 @@ static const bool DEFAULT_CHECKPOINTS_ENABLED = true;
 static const bool DEFAULT_TXINDEX = false;
 static constexpr bool DEFAULT_COINSTATSINDEX{false};
 static const char* const DEFAULT_BLOCKFILTERINDEX = "0";
-/** Default for -persistmempool */
-static const bool DEFAULT_PERSIST_MEMPOOL = true;
 /** Default for -stopatheight */
 static const int DEFAULT_STOPATHEIGHT = 0;
 /** Block files containing a block-height within MIN_BLOCKS_TO_KEEP of ActiveChain().Tip() will not be pruned. */
@@ -113,7 +92,7 @@ enum class SynchronizationState {
 };
 
 extern RecursiveMutex cs_main;
-extern Mutex g_best_block_mutex;
+extern GlobalMutex g_best_block_mutex;
 extern std::condition_variable g_best_block_cv;
 /** Used to notify getblocktemplate RPC of new tips. */
 extern uint256 g_best_block;
@@ -698,7 +677,7 @@ public:
     void CheckBlockIndex();
 
     /** Load the persisted mempool from disk */
-    void LoadMempool(const ArgsManager& args);
+    void LoadMempool(const fs::path& load_path, fsbridge::FopenFn mockable_fopen_function = fsbridge::fopen);
 
     /** Update the chain tip based on database information, i.e. CoinsTip()'s best block. */
     bool LoadChainTip() EXCLUSIVE_LOCKS_REQUIRED(cs_main);
@@ -853,7 +832,7 @@ private:
     friend CChainState;
 
 public:
-    using Options = ChainstateManagerOpts;
+    using Options = kernel::ChainstateManagerOpts;
 
     explicit ChainstateManager(const Options& opts)
         : m_chainparams{opts.chainparams},
@@ -1032,14 +1011,6 @@ bool DeploymentEnabled(const ChainstateManager& chainman, DEP dep)
 {
     return DeploymentEnabled(chainman.GetConsensus(), dep);
 }
-
-using FopenFn = std::function<FILE*(const fs::path&, const char*)>;
-
-/** Dump the mempool to disk. */
-bool DumpMempool(const CTxMemPool& pool, FopenFn mockable_fopen_function = fsbridge::fopen, bool skip_file_commit = false);
-
-/** Load the mempool from disk. */
-bool LoadMempool(CTxMemPool& pool, CChainState& active_chainstate, FopenFn mockable_fopen_function = fsbridge::fopen);
 
 /**
  * Return the expected assumeutxo value for a given height, if one exists.

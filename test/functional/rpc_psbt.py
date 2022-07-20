@@ -9,10 +9,11 @@ from decimal import Decimal
 from itertools import product
 
 from test_framework.descriptors import descsum_create
-from test_framework.key import ECKey
+from test_framework.key import ECKey, H_POINT
 from test_framework.messages import (
-    ser_compact_size,
+    MAX_BIP125_RBF_SEQUENCE,
     WITNESS_SCALE_FACTOR,
+    ser_compact_size,
 )
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import (
@@ -21,13 +22,13 @@ from test_framework.util import (
     assert_greater_than,
     assert_raises_rpc_error,
     find_output,
+    find_vout_for_address,
 )
 from test_framework.wallet_util import bytes_to_wif
 
 import json
 import os
 
-MAX_BIP125_RBF_SEQUENCE = 0xfffffffd
 
 # Create one-input, one-output, no-fee transaction:
 class PSBTTest(BitcoinTestFramework):
@@ -722,6 +723,57 @@ class PSBTTest(BitcoinTestFramework):
             options={"add_inputs": True}
         )
         assert_equal(psbt2["fee"], psbt3["fee"])
+
+        self.log.info("Test signing inputs that the wallet has keys for but is not watching the scripts")
+        self.nodes[1].createwallet(wallet_name="scriptwatchonly", disable_private_keys=True)
+        watchonly = self.nodes[1].get_wallet_rpc("scriptwatchonly")
+
+        eckey = ECKey()
+        eckey.generate()
+        privkey = bytes_to_wif(eckey.get_bytes())
+
+        desc = descsum_create("wsh(pkh({}))".format(eckey.get_pubkey().get_bytes().hex()))
+        if self.options.descriptors:
+            res = watchonly.importdescriptors([{"desc": desc, "timestamp": "now"}])
+        else:
+            res = watchonly.importmulti([{"desc": desc, "timestamp": "now"}])
+        assert res[0]["success"]
+        addr = self.nodes[0].deriveaddresses(desc)[0]
+        self.nodes[0].sendtoaddress(addr, 10)
+        self.generate(self.nodes[0], 1)
+        self.nodes[0].importprivkey(privkey)
+
+        psbt = watchonly.sendall([wallet.getnewaddress()])["psbt"]
+        psbt = self.nodes[0].walletprocesspsbt(psbt)["psbt"]
+        self.nodes[0].sendrawtransaction(self.nodes[0].finalizepsbt(psbt)["hex"])
+
+        # Same test but for taproot
+        if self.options.descriptors:
+            eckey = ECKey()
+            eckey.generate()
+            privkey = bytes_to_wif(eckey.get_bytes())
+
+            desc = descsum_create("tr({},pk({}))".format(H_POINT, eckey.get_pubkey().get_bytes().hex()))
+            res = watchonly.importdescriptors([{"desc": desc, "timestamp": "now"}])
+            assert res[0]["success"]
+            addr = self.nodes[0].deriveaddresses(desc)[0]
+            self.nodes[0].sendtoaddress(addr, 10)
+            self.generate(self.nodes[0], 1)
+            self.nodes[0].importdescriptors([{"desc": descsum_create("tr({})".format(privkey)), "timestamp":"now"}])
+
+            psbt = watchonly.sendall([wallet.getnewaddress()])["psbt"]
+            psbt = self.nodes[0].walletprocesspsbt(psbt)["psbt"]
+            self.nodes[0].sendrawtransaction(self.nodes[0].finalizepsbt(psbt)["hex"])
+
+            self.log.info("Test that walletprocesspsbt both updates and signs a non-updated psbt containing Taproot inputs")
+            addr = self.nodes[0].getnewaddress("", "bech32m")
+            txid = self.nodes[0].sendtoaddress(addr, 1)
+            vout = find_vout_for_address(self.nodes[0], txid, addr)
+            psbt = self.nodes[0].createpsbt([{"txid": txid, "vout": vout}], [{self.nodes[0].getnewaddress(): 0.9999}])
+            signed = self.nodes[0].walletprocesspsbt(psbt)
+            rawtx = self.nodes[0].finalizepsbt(signed["psbt"])["hex"]
+            self.nodes[0].sendrawtransaction(rawtx)
+            self.generate(self.nodes[0], 1)
 
 if __name__ == '__main__':
     PSBTTest().main()

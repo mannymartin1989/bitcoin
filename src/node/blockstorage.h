@@ -49,7 +49,7 @@ extern std::atomic_bool fReindex;
 /** Pruning-related variables and constants */
 /** True if we're running in -prune mode. */
 extern bool fPruneMode;
-/** Number of MiB of block files that we're trying to stay below. */
+/** Number of bytes of block files that we're trying to stay below. */
 extern uint64_t nPruneTarget;
 
 // Because validation code takes pointers to the map's CBlockIndex objects, if
@@ -211,7 +211,7 @@ bool ReadRawBlockFromDisk(std::vector<uint8_t>& block, const FlatFilePos& pos, c
 
 bool UndoReadFromDisk(CBlockUndo& blockundo, const CBlockIndex* pindex);
 
-void ThreadImport(ChainstateManager& chainman, std::vector<fs::path> vImportFiles, const ArgsManager& args);
+void ThreadImport(ChainstateManager& chainman, std::vector<fs::path> vImportFiles, const ArgsManager& args, const fs::path& mempool_path);
 } // namespace node
 
 #endif // BITCOIN_NODE_BLOCKSTORAGE_H

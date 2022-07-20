@@ -5,7 +5,7 @@
 #include <qt/walletframe.h>
 
 #include <fs.h>
-#include <node/ui_interface.h>
+#include <node/interface_ui.h>
 #include <psbt.h>
 #include <qt/guiutil.h>
 #include <qt/overviewpage.h>
@@ -213,6 +213,14 @@ void WalletFrame::gotoLoadPSBT(bool from_clipboard)
         }
         std::ifstream in{filename.toLocal8Bit().data(), std::ios::binary};
         data.assign(std::istream_iterator<unsigned char>{in}, {});
+
+        // Some psbt files may be base64 strings in the file rather than binary data
+        std::string b64_str{data.begin(), data.end()};
+        b64_str.erase(b64_str.find_last_not_of(" \t\n\r\f\v") + 1); // Trim trailing whitespace
+        auto b64_dec = DecodeBase64(b64_str);
+        if (b64_dec.has_value()) {
+            data = b64_dec.value();
+        }
     }
 
     std::string error;
