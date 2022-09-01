@@ -8,7 +8,7 @@
 
 #include <chainparams.h>
 #include <common/bloom.h>
-#include <compat.h>
+#include <compat/compat.h>
 #include <node/connection_types.h>
 #include <consensus/amount.h>
 #include <crypto/siphash.h>
@@ -325,13 +325,13 @@ public:
 class TransportSerializer {
 public:
     // prepare message for transport (header construction, error-correction computation, payload encryption, etc.)
-    virtual void prepareForTransport(CSerializedNetMsg& msg, std::vector<unsigned char>& header) = 0;
+    virtual void prepareForTransport(CSerializedNetMsg& msg, std::vector<unsigned char>& header) const = 0;
     virtual ~TransportSerializer() {}
 };
 
-class V1TransportSerializer  : public TransportSerializer {
+class V1TransportSerializer : public TransportSerializer {
 public:
-    void prepareForTransport(CSerializedNetMsg& msg, std::vector<unsigned char>& header) override;
+    void prepareForTransport(CSerializedNetMsg& msg, std::vector<unsigned char>& header) const override;
 };
 
 /** Information about a peer */
@@ -341,10 +341,10 @@ class CNode
     friend struct ConnmanTestMsg;
 
 public:
-    std::unique_ptr<TransportDeserializer> m_deserializer;
-    std::unique_ptr<TransportSerializer> m_serializer;
+    const std::unique_ptr<TransportDeserializer> m_deserializer; // Used only by SocketHandler thread
+    const std::unique_ptr<const TransportSerializer> m_serializer;
 
-    NetPermissionFlags m_permissionFlags{NetPermissionFlags::None};
+    NetPermissionFlags m_permissionFlags{NetPermissionFlags::None}; // treated as const outside of fuzz tester
 
     /**
      * Socket used for communication with the node.
@@ -368,7 +368,7 @@ public:
 
     RecursiveMutex cs_vProcessMsg;
     std::list<CNetMessage> vProcessMsg GUARDED_BY(cs_vProcessMsg);
-    size_t nProcessQueueSize{0};
+    size_t nProcessQueueSize GUARDED_BY(cs_vProcessMsg){0};
 
     RecursiveMutex cs_sendProcessing;
 
@@ -393,7 +393,7 @@ public:
      * from the wire. This cleaned string can safely be logged or displayed.
      */
     std::string cleanSubVer GUARDED_BY(m_subver_mutex){};
-    bool m_prefer_evict{false}; // This peer is preferred for eviction.
+    bool m_prefer_evict{false}; // This peer is preferred for eviction. (treated as const)
     bool HasPermission(NetPermissionFlags permission) const {
         return NetPermissions::HasFlag(m_permissionFlags, permission);
     }
@@ -513,10 +513,16 @@ public:
      * criterium in CConnman::AttemptToEvictConnection. */
     std::atomic<std::chrono::microseconds> m_min_ping_time{std::chrono::microseconds::max()};
 
-    CNode(NodeId id, std::shared_ptr<Sock> sock, const CAddress& addrIn,
-          uint64_t nKeyedNetGroupIn, uint64_t nLocalHostNonceIn,
-          const CAddress& addrBindIn, const std::string& addrNameIn,
-          ConnectionType conn_type_in, bool inbound_onion);
+    CNode(NodeId id,
+          std::shared_ptr<Sock> sock,
+          const CAddress& addrIn,
+          uint64_t nKeyedNetGroupIn,
+          uint64_t nLocalHostNonceIn,
+          const CAddress& addrBindIn,
+          const std::string& addrNameIn,
+          ConnectionType conn_type_in,
+          bool inbound_onion,
+          std::unique_ptr<i2p::sam::Session>&& i2p_sam_session = nullptr);
     CNode(const CNode&) = delete;
     CNode& operator=(const CNode&) = delete;
 
@@ -596,6 +602,18 @@ private:
 
     mapMsgTypeSize mapSendBytesPerMsgType GUARDED_BY(cs_vSend);
     mapMsgTypeSize mapRecvBytesPerMsgType GUARDED_BY(cs_vRecv);
+
+    /**
+     * If an I2P session is created per connection (for outbound transient I2P
+     * connections) then it is stored here so that it can be destroyed when the
+     * socket is closed. I2P sessions involve a data/transport socket (in `m_sock`)
+     * and a control socket (in `m_i2p_sam_session`). For transient sessions, once
+     * the data socket is closed, the control socket is not going to be used anymore
+     * and is just taking up resources. So better close it as soon as `m_sock` is
+     * closed.
+     * Otherwise this unique_ptr is empty.
+     */
+    std::unique_ptr<i2p::sam::Session> m_i2p_sam_session GUARDED_BY(m_sock_mutex);
 };
 
 /**
@@ -1072,7 +1090,8 @@ private:
 
     /**
      * I2P SAM session.
-     * Used to accept incoming and make outgoing I2P connections.
+     * Used to accept incoming and make outgoing I2P connections from a persistent
+     * address.
      */
     std::unique_ptr<i2p::sam::Session> m_i2p_sam_session;
 

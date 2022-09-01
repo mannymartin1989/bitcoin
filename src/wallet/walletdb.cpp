@@ -59,6 +59,7 @@ const std::string WALLETDESCRIPTORCKEY{"walletdescriptorckey"};
 const std::string WALLETDESCRIPTORKEY{"walletdescriptorkey"};
 const std::string WATCHMETA{"watchmeta"};
 const std::string WATCHS{"watchs"};
+const std::unordered_set<std::string> LEGACY_TYPES{CRYPTED_KEY, CSCRIPT, DEFAULTKEY, HDCHAIN, KEYMETA, KEY, OLD_KEY, POOL, WATCHMETA, WATCHS};
 } // namespace DBKeys
 
 //
@@ -856,18 +857,18 @@ DBErrors WalletBatch::LoadWallet(CWallet* pwallet)
     }
 
     // Set the descriptor caches
-    for (auto desc_cache_pair : wss.m_descriptor_caches) {
+    for (const auto& desc_cache_pair : wss.m_descriptor_caches) {
         auto spk_man = pwallet->GetScriptPubKeyMan(desc_cache_pair.first);
         assert(spk_man);
         ((DescriptorScriptPubKeyMan*)spk_man)->SetCache(desc_cache_pair.second);
     }
 
     // Set the descriptor keys
-    for (auto desc_key_pair : wss.m_descriptor_keys) {
+    for (const auto& desc_key_pair : wss.m_descriptor_keys) {
         auto spk_man = pwallet->GetScriptPubKeyMan(desc_key_pair.first.first);
         ((DescriptorScriptPubKeyMan*)spk_man)->AddKey(desc_key_pair.first.second, desc_key_pair.second);
     }
-    for (auto desc_key_pair : wss.m_descriptor_crypt_keys) {
+    for (const auto& desc_key_pair : wss.m_descriptor_crypt_keys) {
         auto spk_man = pwallet->GetScriptPubKeyMan(desc_key_pair.first.first);
         ((DescriptorScriptPubKeyMan*)spk_man)->AddCryptedKey(desc_key_pair.first.second, desc_key_pair.second.first, desc_key_pair.second.second);
     }
@@ -1081,6 +1082,45 @@ bool WalletBatch::WriteHDChain(const CHDChain& chain)
 bool WalletBatch::WriteWalletFlags(const uint64_t flags)
 {
     return WriteIC(DBKeys::FLAGS, flags);
+}
+
+bool WalletBatch::EraseRecords(const std::unordered_set<std::string>& types)
+{
+    // Get cursor
+    if (!m_batch->StartCursor())
+    {
+        return false;
+    }
+
+    // Iterate the DB and look for any records that have the type prefixes
+    while (true)
+    {
+        // Read next record
+        CDataStream key(SER_DISK, CLIENT_VERSION);
+        CDataStream value(SER_DISK, CLIENT_VERSION);
+        bool complete;
+        bool ret = m_batch->ReadAtCursor(key, value, complete);
+        if (complete) {
+            break;
+        }
+        else if (!ret)
+        {
+            m_batch->CloseCursor();
+            return false;
+        }
+
+        // Make a copy of key to avoid data being deleted by the following read of the type
+        Span<const unsigned char> key_data = MakeUCharSpan(key);
+
+        std::string type;
+        key >> type;
+
+        if (types.count(type) > 0) {
+            m_batch->Erase(key_data);
+        }
+    }
+    m_batch->CloseCursor();
+    return true;
 }
 
 bool WalletBatch::TxnBegin()

@@ -133,13 +133,12 @@ BITCOIN_CORE_H = \
   clientversion.h \
   coins.h \
   common/bloom.h \
-  compat.h \
   compat/assumptions.h \
   compat/byteswap.h \
+  compat/compat.h \
   compat/cpuid.h \
   compat/endian.h \
   compressor.h \
-  node/connection_types.h \
   consensus/consensus.h \
   consensus/tx_check.h \
   consensus/tx_verify.h \
@@ -149,10 +148,10 @@ BITCOIN_CORE_H = \
   dbwrapper.h \
   deploymentinfo.h \
   deploymentstatus.h \
-  node/eviction.h \
   external_signer.h \
   flatfile.h \
   fs.h \
+  headerssync.h \
   httprpc.h \
   httpserver.h \
   i2p.h \
@@ -179,12 +178,12 @@ BITCOIN_CORE_H = \
   kernel/mempool_limits.h \
   kernel/mempool_options.h \
   kernel/mempool_persist.h \
+  kernel/validation_cache_sizes.h \
   key.h \
   key_io.h \
   logging.h \
   logging/timer.h \
   mapport.h \
-  mempool_args.h \
   memusage.h \
   merkleblock.h \
   net.h \
@@ -199,14 +198,18 @@ BITCOIN_CORE_H = \
   node/caches.h \
   node/chainstate.h \
   node/coin.h \
+  node/connection_types.h \
   node/context.h \
+  node/eviction.h \
+  node/interface_ui.h \
+  node/mempool_args.h \
   node/mempool_persist_args.h \
   node/miner.h \
   node/minisketchwrapper.h \
   node/psbt.h \
   node/transaction.h \
-  node/interface_ui.h \
   node/utxo_snapshot.h \
+  node/validation_cache_args.h \
   noui.h \
   outputtype.h \
   policy/feerate.h \
@@ -262,6 +265,7 @@ BITCOIN_CORE_H = \
   undo.h \
   util/asmap.h \
   util/bip32.h \
+  util/bitdeque.h \
   util/bytevectorhash.h \
   util/check.h \
   util/epochguard.h \
@@ -358,6 +362,7 @@ libbitcoin_node_a_SOURCES = \
   dbwrapper.cpp \
   deploymentstatus.cpp \
   flatfile.cpp \
+  headerssync.cpp \
   httprpc.cpp \
   httpserver.cpp \
   i2p.cpp \
@@ -372,10 +377,9 @@ libbitcoin_node_a_SOURCES = \
   kernel/context.cpp \
   kernel/mempool_persist.cpp \
   mapport.cpp \
-  mempool_args.cpp \
   net.cpp \
-  netgroup.cpp \
   net_processing.cpp \
+  netgroup.cpp \
   node/blockstorage.cpp \
   node/caches.cpp \
   node/chainstate.cpp \
@@ -383,13 +387,15 @@ libbitcoin_node_a_SOURCES = \
   node/connection_types.cpp \
   node/context.cpp \
   node/eviction.cpp \
+  node/interface_ui.cpp \
   node/interfaces.cpp \
+  node/mempool_args.cpp \
   node/mempool_persist_args.cpp \
   node/miner.cpp \
   node/minisketchwrapper.cpp \
   node/psbt.cpp \
   node/transaction.cpp \
-  node/interface_ui.cpp \
+  node/validation_cache_args.cpp \
   noui.cpp \
   policy/fees.cpp \
   policy/fees_args.cpp \
@@ -402,8 +408,8 @@ libbitcoin_node_a_SOURCES = \
   rpc/fees.cpp \
   rpc/mempool.cpp \
   rpc/mining.cpp \
-  rpc/node.cpp \
   rpc/net.cpp \
+  rpc/node.cpp \
   rpc/output_script.cpp \
   rpc/rawtransaction.cpp \
   rpc/server.cpp \
@@ -1061,6 +1067,15 @@ libbitcoin_ipc_mpgen_output = \
 nodist_libbitcoin_ipc_a_SOURCES = $(libbitcoin_ipc_mpgen_output)
 CLEANFILES += $(libbitcoin_ipc_mpgen_output)
 endif
+
+%.raw.h: %.raw
+	@$(MKDIR_P) $(@D)
+	@{ \
+	 echo "static unsigned const char $(*F)_raw[] = {" && \
+	 $(HEXDUMP) -v -e '8/1 "0x%02x, "' -e '"\n"' $< | $(SED) -e 's/0x  ,//g' && \
+	 echo "};"; \
+	} > "$@.new" && mv -f "$@.new" "$@"
+	@echo "Generated $@"
 
 include Makefile.minisketch.include
 

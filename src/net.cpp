@@ -13,7 +13,7 @@
 #include <addrman.h>
 #include <banman.h>
 #include <clientversion.h>
-#include <compat.h>
+#include <compat/compat.h>
 #include <consensus/consensus.h>
 #include <crypto/sha256.h>
 #include <node/eviction.h>
@@ -85,8 +85,8 @@ static constexpr int DNSSEEDS_DELAY_PEER_THRESHOLD = 1000; // "many" vs "few" pe
 /** The default timeframe for -maxuploadtarget. 1 day. */
 static constexpr std::chrono::seconds MAX_UPLOAD_TIMEFRAME{60 * 60 * 24};
 
-// We add a random period time (0 to 1 seconds) to feeler connections to prevent synchronization.
-#define FEELER_SLEEP_WINDOW 1
+// A random time period (0 to 1 seconds) is added to feeler connections to prevent synchronization.
+static constexpr auto FEELER_SLEEP_WINDOW{1s};
 
 /** Used to pass flags to the Bind() function */
 enum BindFlags {
@@ -187,7 +187,7 @@ static std::vector<CAddress> ConvertSeeds(const std::vector<uint8_t> &vSeedsIn)
     // it'll get a pile of addresses with newer timestamps.
     // Seed nodes are given a random 'last seen time' of between one and two
     // weeks ago.
-    const int64_t nOneWeek = 7*24*60*60;
+    const auto one_week{7 * 24h};
     std::vector<CAddress> vSeedsOut;
     FastRandomContext rng;
     CDataStream s(vSeedsIn, SER_NETWORK, PROTOCOL_VERSION | ADDRV2_FORMAT);
@@ -195,7 +195,7 @@ static std::vector<CAddress> ConvertSeeds(const std::vector<uint8_t> &vSeedsIn)
         CService endpoint;
         s >> endpoint;
         CAddress addr{endpoint, GetDesirableServiceFlags(NODE_NONE)};
-        addr.nTime = GetTime() - rng.randrange(nOneWeek) - nOneWeek;
+        addr.nTime = rng.rand_uniform_delay(Now<NodeSeconds>() - one_week, -one_week);
         LogPrint(BCLog::NET, "Added hardcoded seed: %s\n", addr.ToString());
         vSeedsOut.push_back(addr);
     }
@@ -208,12 +208,11 @@ static std::vector<CAddress> ConvertSeeds(const std::vector<uint8_t> &vSeedsIn)
 // one by discovery.
 CService GetLocalAddress(const CNetAddr& addrPeer)
 {
-    CService ret{CNetAddr(), GetListenPort()};
     CService addr;
     if (GetLocal(addr, &addrPeer)) {
-        ret = CService{addr};
+        return addr;
     }
-    return ret;
+    return CService{CNetAddr(), GetListenPort()};
 }
 
 static int GetnScore(const CService& addr)
@@ -452,10 +451,9 @@ CNode* CConnman::ConnectNode(CAddress addrConnect, const char *pszDest, bool fCo
         }
     }
 
-    /// debug print
     LogPrintLevel(BCLog::NET, BCLog::Level::Debug, "trying connection %s lastseen=%.1fhrs\n",
-                  pszDest ? pszDest : addrConnect.ToString(),
-                  pszDest ? 0.0 : (double)(GetAdjustedTime() - addrConnect.nTime) / 3600.0);
+        pszDest ? pszDest : addrConnect.ToString(),
+        Ticks<HoursDouble>(pszDest ? 0h : Now<NodeSeconds>() - addrConnect.nTime));
 
     // Resolve
     const uint16_t default_port{pszDest != nullptr ? Params().GetDefaultPort(pszDest) :
@@ -486,18 +484,27 @@ CNode* CConnman::ConnectNode(CAddress addrConnect, const char *pszDest, bool fCo
     Proxy proxy;
     CAddress addr_bind;
     assert(!addr_bind.IsValid());
+    std::unique_ptr<i2p::sam::Session> i2p_transient_session;
 
     if (addrConnect.IsValid()) {
+        const bool use_proxy{GetProxy(addrConnect.GetNetwork(), proxy)};
         bool proxyConnectionFailed = false;
 
-        if (addrConnect.GetNetwork() == NET_I2P && m_i2p_sam_session.get() != nullptr) {
+        if (addrConnect.GetNetwork() == NET_I2P && use_proxy) {
             i2p::Connection conn;
-            if (m_i2p_sam_session->Connect(addrConnect, conn, proxyConnectionFailed)) {
-                connected = true;
+
+            if (m_i2p_sam_session) {
+                connected = m_i2p_sam_session->Connect(addrConnect, conn, proxyConnectionFailed);
+            } else {
+                i2p_transient_session = std::make_unique<i2p::sam::Session>(proxy.proxy, &interruptNet);
+                connected = i2p_transient_session->Connect(addrConnect, conn, proxyConnectionFailed);
+            }
+
+            if (connected) {
                 sock = std::move(conn.sock);
                 addr_bind = CAddress{conn.me, NODE_NONE};
             }
-        } else if (GetProxy(addrConnect.GetNetwork(), proxy)) {
+        } else if (use_proxy) {
             sock = CreateSock(proxy.proxy);
             if (!sock) {
                 return nullptr;
@@ -548,7 +555,8 @@ CNode* CConnman::ConnectNode(CAddress addrConnect, const char *pszDest, bool fCo
                              addr_bind,
                              pszDest ? pszDest : "",
                              conn_type,
-                             /*inbound_onion=*/false);
+                             /*inbound_onion=*/false,
+                             std::move(i2p_transient_session));
     pnode->AddRef();
 
     // We're making a new connection, harvest entropy from the time (and our peer count)
@@ -565,6 +573,7 @@ void CNode::CloseSocketDisconnect()
         LogPrint(BCLog::NET, "disconnecting peer=%d\n", id);
         m_sock.reset();
     }
+    m_i2p_sam_session.reset();
 }
 
 void CConnman::AddWhitelistPermissionFlags(NetPermissionFlags& flags, const CNetAddr &addr) const {
@@ -788,7 +797,8 @@ CNetMessage V1TransportDeserializer::GetMessage(const std::chrono::microseconds 
     return msg;
 }
 
-void V1TransportSerializer::prepareForTransport(CSerializedNetMsg& msg, std::vector<unsigned char>& header) {
+void V1TransportSerializer::prepareForTransport(CSerializedNetMsg& msg, std::vector<unsigned char>& header) const
+{
     // create dbl-sha256 checksum
     uint256 hash = Hash(msg.data);
 
@@ -1469,9 +1479,8 @@ void CConnman::ThreadDNSAddressSeed()
             unsigned int nMaxIPs = 256; // Limits number of IPs learned from a DNS seed
             if (LookupHost(host, vIPs, nMaxIPs, true)) {
                 for (const CNetAddr& ip : vIPs) {
-                    int nOneDay = 24*3600;
                     CAddress addr = CAddress(CService(ip, Params().GetDefaultPort()), requiredServiceBits);
-                    addr.nTime = GetTime() - 3*nOneDay - rng.randrange(4*nOneDay); // use a random age between 3 and 7 days old
+                    addr.nTime = rng.rand_uniform_delay(Now<NodeSeconds>() - 3 * 24h, -4 * 24h); // use a random age between 3 and 7 days old
                     vAdd.push_back(addr);
                     found++;
                 }
@@ -1568,6 +1577,7 @@ int CConnman::GetExtraBlockRelayCount() const
 void CConnman::ThreadOpenConnections(const std::vector<std::string> connect)
 {
     SetSyscallSandboxPolicy(SyscallSandboxPolicy::NET_OPEN_CONNECTION);
+    FastRandomContext rng;
     // Connect to specific addresses
     if (!connect.empty())
     {
@@ -1736,7 +1746,7 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect)
 
         addrman.ResolveCollisions();
 
-        int64_t nANow = GetAdjustedTime();
+        const auto current_time{NodeClock::now()};
         int nTries = 0;
         while (!interruptNet)
         {
@@ -1759,7 +1769,7 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect)
                 break;
 
             CAddress addr;
-            int64_t addr_last_try{0};
+            NodeSeconds addr_last_try{0s};
 
             if (fFeeler) {
                 // First, try to get a tried table collision address. This returns
@@ -1799,8 +1809,9 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect)
                 continue;
 
             // only consider very recently tried nodes after 30 failed attempts
-            if (nANow - addr_last_try < 600 && nTries < 30)
+            if (current_time - addr_last_try < 10min && nTries < 30) {
                 continue;
+            }
 
             // for non-feelers, require all the services we'll want,
             // for feelers, only require they be a full node (only because most
@@ -1821,12 +1832,11 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect)
         }
 
         if (addrConnect.IsValid()) {
-
             if (fFeeler) {
                 // Add small amount of random noise before connection to avoid synchronization.
-                int randsleep = GetRand<int>(FEELER_SLEEP_WINDOW * 1000);
-                if (!interruptNet.sleep_for(std::chrono::milliseconds(randsleep)))
+                if (!interruptNet.sleep_for(rng.rand_uniform_duration<CThreadInterrupt::Clock>(FEELER_SLEEP_WINDOW))) {
                     return;
+                }
                 LogPrint(BCLog::NET, "Making feeler connection to %s\n", addrConnect.ToString());
             }
 
@@ -2260,7 +2270,7 @@ bool CConnman::Start(CScheduler& scheduler, const Options& connOptions)
     }
 
     Proxy i2p_sam;
-    if (GetProxy(NET_I2P, i2p_sam)) {
+    if (GetProxy(NET_I2P, i2p_sam) && connOptions.m_i2p_accept_incoming) {
         m_i2p_sam_session = std::make_unique<i2p::sam::Session>(gArgs.GetDataDirNet() / "i2p_private_key",
                                                                 i2p_sam.proxy, &interruptNet);
     }
@@ -2334,7 +2344,7 @@ bool CConnman::Start(CScheduler& scheduler, const Options& connOptions)
     // Process messages
     threadMessageHandler = std::thread(&util::TraceThread, "msghand", [this] { ThreadMessageHandler(); });
 
-    if (connOptions.m_i2p_accept_incoming && m_i2p_sam_session.get() != nullptr) {
+    if (m_i2p_sam_session) {
         threadI2PAcceptIncoming =
             std::thread(&util::TraceThread, "i2paccept", [this] { ThreadI2PAcceptIncoming(); });
     }
@@ -2703,20 +2713,29 @@ ServiceFlags CConnman::GetLocalServices() const
 
 unsigned int CConnman::GetReceiveFloodSize() const { return nReceiveFloodSize; }
 
-CNode::CNode(NodeId idIn, std::shared_ptr<Sock> sock, const CAddress& addrIn,
-             uint64_t nKeyedNetGroupIn, uint64_t nLocalHostNonceIn,
-             const CAddress& addrBindIn, const std::string& addrNameIn,
-             ConnectionType conn_type_in, bool inbound_onion)
-    : m_sock{sock},
+CNode::CNode(NodeId idIn,
+             std::shared_ptr<Sock> sock,
+             const CAddress& addrIn,
+             uint64_t nKeyedNetGroupIn,
+             uint64_t nLocalHostNonceIn,
+             const CAddress& addrBindIn,
+             const std::string& addrNameIn,
+             ConnectionType conn_type_in,
+             bool inbound_onion,
+             std::unique_ptr<i2p::sam::Session>&& i2p_sam_session)
+    : m_deserializer{std::make_unique<V1TransportDeserializer>(V1TransportDeserializer(Params(), idIn, SER_NETWORK, INIT_PROTO_VERSION))},
+      m_serializer{std::make_unique<V1TransportSerializer>(V1TransportSerializer())},
+      m_sock{sock},
       m_connected{GetTime<std::chrono::seconds>()},
-      addr(addrIn),
-      addrBind(addrBindIn),
+      addr{addrIn},
+      addrBind{addrBindIn},
       m_addr_name{addrNameIn.empty() ? addr.ToStringIPPort() : addrNameIn},
-      m_inbound_onion(inbound_onion),
-      nKeyedNetGroup(nKeyedNetGroupIn),
-      id(idIn),
-      nLocalHostNonce(nLocalHostNonceIn),
-      m_conn_type(conn_type_in)
+      m_inbound_onion{inbound_onion},
+      nKeyedNetGroup{nKeyedNetGroupIn},
+      id{idIn},
+      nLocalHostNonce{nLocalHostNonceIn},
+      m_conn_type{conn_type_in},
+      m_i2p_sam_session{std::move(i2p_sam_session)}
 {
     if (inbound_onion) assert(conn_type_in == ConnectionType::INBOUND);
 
@@ -2729,9 +2748,6 @@ CNode::CNode(NodeId idIn, std::shared_ptr<Sock> sock, const CAddress& addrIn,
     } else {
         LogPrint(BCLog::NET, "Added connection peer=%d\n", id);
     }
-
-    m_deserializer = std::make_unique<V1TransportDeserializer>(V1TransportDeserializer(Params(), id, SER_NETWORK, INIT_PROTO_VERSION));
-    m_serializer = std::make_unique<V1TransportSerializer>(V1TransportSerializer());
 }
 
 bool CConnman::NodeFullyConnected(const CNode* pnode)
@@ -2825,7 +2841,7 @@ void CaptureMessageToFile(const CAddress& addr,
     fs::create_directories(base_path);
 
     fs::path path = base_path / (is_incoming ? "msgs_recv.dat" : "msgs_sent.dat");
-    CAutoFile f(fsbridge::fopen(path, "ab"), SER_DISK, CLIENT_VERSION);
+    AutoFile f{fsbridge::fopen(path, "ab")};
 
     ser_writedata64(f, now.count());
     f.write(MakeByteSpan(msg_type));

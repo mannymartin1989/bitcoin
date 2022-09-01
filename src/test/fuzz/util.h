@@ -8,7 +8,7 @@
 #include <arith_uint256.h>
 #include <chainparamsbase.h>
 #include <coins.h>
-#include <compat.h>
+#include <compat/compat.h>
 #include <consensus/amount.h>
 #include <consensus/consensus.h>
 #include <merkleblock.h>
@@ -287,10 +287,7 @@ inline CService ConsumeService(FuzzedDataProvider& fuzzed_data_provider) noexcep
     return {ConsumeNetAddr(fuzzed_data_provider), fuzzed_data_provider.ConsumeIntegral<uint16_t>()};
 }
 
-inline CAddress ConsumeAddress(FuzzedDataProvider& fuzzed_data_provider) noexcept
-{
-    return {ConsumeService(fuzzed_data_provider), ConsumeWeakEnum(fuzzed_data_provider, ALL_SERVICE_FLAGS), fuzzed_data_provider.ConsumeIntegral<uint32_t>()};
-}
+CAddress ConsumeAddress(FuzzedDataProvider& fuzzed_data_provider) noexcept;
 
 template <bool ReturnUniquePtr = false>
 auto ConsumeNode(FuzzedDataProvider& fuzzed_data_provider, const std::optional<NodeId>& node_id_in = std::nullopt) noexcept
@@ -358,17 +355,16 @@ public:
 
 class FuzzedAutoFileProvider
 {
-    FuzzedDataProvider& m_fuzzed_data_provider;
     FuzzedFileProvider m_fuzzed_file_provider;
 
 public:
-    FuzzedAutoFileProvider(FuzzedDataProvider& fuzzed_data_provider) : m_fuzzed_data_provider{fuzzed_data_provider}, m_fuzzed_file_provider{fuzzed_data_provider}
+    FuzzedAutoFileProvider(FuzzedDataProvider& fuzzed_data_provider) : m_fuzzed_file_provider{fuzzed_data_provider}
     {
     }
 
-    CAutoFile open()
+    AutoFile open()
     {
-        return {m_fuzzed_file_provider.open(), m_fuzzed_data_provider.ConsumeIntegral<int>(), m_fuzzed_data_provider.ConsumeIntegral<int>()};
+        return AutoFile{m_fuzzed_file_provider.open()};
     }
 };
 

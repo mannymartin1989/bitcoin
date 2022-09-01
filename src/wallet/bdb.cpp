@@ -3,6 +3,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <compat/compat.h>
 #include <fs.h>
 #include <wallet/bdb.h>
 #include <wallet/db.h>
@@ -431,7 +432,7 @@ void BerkeleyEnvironment::ReloadDbEnv()
     });
 
     std::vector<fs::path> filenames;
-    for (auto it : m_databases) {
+    for (const auto& it : m_databases) {
         filenames.push_back(it.first);
     }
     // Close the individual Db's
