@@ -9,6 +9,7 @@
 
 #include <chainparams.h>
 #include <clientversion.h>
+#include <common/url.h>
 #include <compat/compat.h>
 #include <init.h>
 #include <interfaces/chain.h>
@@ -25,7 +26,6 @@
 #include <util/threadnames.h>
 #include <util/tokenpipe.h>
 #include <util/translation.h>
-#include <util/url.h>
 
 #include <any>
 #include <functional>
@@ -216,7 +216,7 @@ static bool AppInit(NodeContext& node, int argc, char* argv[])
                 if (token) { // Success
                     exit(EXIT_SUCCESS);
                 } else { // fRet = false or token read error (premature exit).
-                    tfm::format(std::cerr, "Error during initializaton - check debug.log for details\n");
+                    tfm::format(std::cerr, "Error during initialization - check debug.log for details\n");
                     exit(EXIT_FAILURE);
                 }
             }

@@ -6,6 +6,7 @@
 #include <coins.h>
 #include <crypto/muhash.h>
 #include <index/coinstatsindex.h>
+#include <kernel/coinstats.h>
 #include <node/blockstorage.h>
 #include <serialize.h>
 #include <txdb.h>
@@ -104,7 +105,7 @@ struct DBHashKey {
 std::unique_ptr<CoinStatsIndex> g_coin_stats_index;
 
 CoinStatsIndex::CoinStatsIndex(std::unique_ptr<interfaces::Chain> chain, size_t n_cache_size, bool f_memory, bool f_wipe)
-    : BaseIndex(std::move(chain))
+    : BaseIndex(std::move(chain), "coinstatsindex")
 {
     fs::path path{gArgs.GetDataDirNet() / "indexes" / "coinstats"};
     fs::create_directories(path);
@@ -143,17 +144,13 @@ bool CoinStatsIndex::CustomAppend(const interfaces::BlockInfo& block)
             }
         }
 
-        // TODO: Deduplicate BIP30 related code
-        bool is_bip30_block{(block.height == 91722 && block.hash == uint256S("0x00000000000271a2dc26e7667f8419f2e15416dc6955e5a6c6cdf3f2574dd08e")) ||
-                            (block.height == 91812 && block.hash == uint256S("0x00000000000af0aed4792b1acee3d966af36cf5def14935db8de83d6f9306f2f"))};
-
         // Add the new utxos created from the block
         assert(block.data);
         for (size_t i = 0; i < block.data->vtx.size(); ++i) {
             const auto& tx{block.data->vtx.at(i)};
 
             // Skip duplicate txid coinbase transactions (BIP30).
-            if (is_bip30_block && tx->IsCoinBase()) {
+            if (IsBIP30Unspendable(*pindex) && tx->IsCoinBase()) {
                 m_total_unspendable_amount += block_subsidy;
                 m_total_unspendables_bip30 += block_subsidy;
                 continue;
@@ -322,13 +319,13 @@ static bool LookUpOne(const CDBWrapper& db, const interfaces::BlockKey& block, D
     return db.Read(DBHashKey(block.hash), result);
 }
 
-std::optional<CCoinsStats> CoinStatsIndex::LookUpStats(const CBlockIndex* block_index) const
+std::optional<CCoinsStats> CoinStatsIndex::LookUpStats(const CBlockIndex& block_index) const
 {
-    CCoinsStats stats{Assert(block_index)->nHeight, block_index->GetBlockHash()};
+    CCoinsStats stats{block_index.nHeight, block_index.GetBlockHash()};
     stats.index_used = true;
 
     DBVal entry;
-    if (!LookUpOne(*m_db, {block_index->GetBlockHash(), block_index->nHeight}, entry)) {
+    if (!LookUpOne(*m_db, {block_index.GetBlockHash(), block_index.nHeight}, entry)) {
         return std::nullopt;
     }
 

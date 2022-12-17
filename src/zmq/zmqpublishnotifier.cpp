@@ -6,22 +6,37 @@
 
 #include <chain.h>
 #include <chainparams.h>
+#include <crypto/common.h>
+#include <logging.h>
+#include <netaddress.h>
 #include <netbase.h>
 #include <node/blockstorage.h>
+#include <primitives/block.h>
+#include <primitives/transaction.h>
 #include <rpc/server.h>
+#include <serialize.h>
 #include <streams.h>
-#include <util/system.h>
-#include <validation.h> // For cs_main
+#include <sync.h>
+#include <uint256.h>
+#include <version.h>
 #include <zmq/zmqutil.h>
 
 #include <zmq.h>
 
+#include <cassert>
 #include <cstdarg>
 #include <cstddef>
+#include <cstdint>
+#include <cstring>
 #include <map>
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
+
+namespace Consensus {
+struct Params;
+}
 
 using node::ReadBlockFromDisk;
 
@@ -233,17 +248,13 @@ bool CZMQPublishRawBlockNotifier::NotifyBlock(const CBlockIndex *pindex)
 
     const Consensus::Params& consensusParams = Params().GetConsensus();
     CDataStream ss(SER_NETWORK, PROTOCOL_VERSION | RPCSerializationFlags());
-    {
-        LOCK(cs_main);
-        CBlock block;
-        if(!ReadBlockFromDisk(block, pindex, consensusParams))
-        {
-            zmqError("Can't read block from disk");
-            return false;
-        }
-
-        ss << block;
+    CBlock block;
+    if (!ReadBlockFromDisk(block, pindex, consensusParams)) {
+        zmqError("Can't read block from disk");
+        return false;
     }
+
+    ss << block;
 
     return SendZmqMessage(MSG_RAWBLOCK, &(*ss.begin()), ss.size());
 }

@@ -15,7 +15,6 @@
 #include <key_io.h>
 #include <fs.h>
 #include <policy/policy.h>
-#include <policy/rbf.h>
 #include <primitives/transaction.h>
 #include <script/script.h>
 #include <script/sign.h>
@@ -28,9 +27,9 @@
 #include <util/system.h>
 #include <util/translation.h>
 
+#include <cstdio>
 #include <functional>
 #include <memory>
-#include <stdio.h>
 
 static bool fCreateBlank;
 static std::map<std::string,UniValue> registers;

@@ -31,6 +31,7 @@
 #include <util/syscall_sandbox.h>
 #include <util/system.h>
 #include <util/thread.h>
+#include <util/threadinterrupt.h>
 #include <util/trace.h>
 #include <util/translation.h>
 
@@ -91,13 +92,12 @@ static constexpr auto FEELER_SLEEP_WINDOW{1s};
 /** Used to pass flags to the Bind() function */
 enum BindFlags {
     BF_NONE         = 0,
-    BF_EXPLICIT     = (1U << 0),
-    BF_REPORT_ERROR = (1U << 1),
+    BF_REPORT_ERROR = (1U << 0),
     /**
      * Do not call AddLocal() for our special addresses, e.g., for incoming
      * Tor connections, to prevent gossiping them over the network.
      */
-    BF_DONT_ADVERTISE = (1U << 2),
+    BF_DONT_ADVERTISE = (1U << 1),
 };
 
 // The set of sockets cannot be modified while waiting
@@ -556,7 +556,7 @@ CNode* CConnman::ConnectNode(CAddress addrConnect, const char *pszDest, bool fCo
                              pszDest ? pszDest : "",
                              conn_type,
                              /*inbound_onion=*/false,
-                             std::move(i2p_transient_session));
+                             CNodeOptions{ .i2p_sam_session = std::move(i2p_transient_session) });
     pnode->AddRef();
 
     // We're making a new connection, harvest entropy from the time (and our peer count)
@@ -637,7 +637,7 @@ void CNode::CopyStats(CNodeStats& stats)
         X(mapRecvBytesPerMsgType);
         X(nRecvBytes);
     }
-    X(m_permissionFlags);
+    X(m_permission_flags);
 
     X(m_last_ping_time);
     X(m_min_ping_time);
@@ -936,27 +936,27 @@ void CConnman::AcceptConnection(const ListenSocket& hListenSocket) {
 
     const CAddress addr_bind{MaybeFlipIPv6toCJDNS(GetBindAddress(*sock)), NODE_NONE};
 
-    NetPermissionFlags permissionFlags = NetPermissionFlags::None;
-    hListenSocket.AddSocketPermissionFlags(permissionFlags);
+    NetPermissionFlags permission_flags = NetPermissionFlags::None;
+    hListenSocket.AddSocketPermissionFlags(permission_flags);
 
-    CreateNodeFromAcceptedSocket(std::move(sock), permissionFlags, addr_bind, addr);
+    CreateNodeFromAcceptedSocket(std::move(sock), permission_flags, addr_bind, addr);
 }
 
 void CConnman::CreateNodeFromAcceptedSocket(std::unique_ptr<Sock>&& sock,
-                                            NetPermissionFlags permissionFlags,
+                                            NetPermissionFlags permission_flags,
                                             const CAddress& addr_bind,
                                             const CAddress& addr)
 {
     int nInbound = 0;
     int nMaxInbound = nMaxConnections - m_max_outbound;
 
-    AddWhitelistPermissionFlags(permissionFlags, addr);
-    if (NetPermissions::HasFlag(permissionFlags, NetPermissionFlags::Implicit)) {
-        NetPermissions::ClearFlag(permissionFlags, NetPermissionFlags::Implicit);
-        if (gArgs.GetBoolArg("-whitelistforcerelay", DEFAULT_WHITELISTFORCERELAY)) NetPermissions::AddFlag(permissionFlags, NetPermissionFlags::ForceRelay);
-        if (gArgs.GetBoolArg("-whitelistrelay", DEFAULT_WHITELISTRELAY)) NetPermissions::AddFlag(permissionFlags, NetPermissionFlags::Relay);
-        NetPermissions::AddFlag(permissionFlags, NetPermissionFlags::Mempool);
-        NetPermissions::AddFlag(permissionFlags, NetPermissionFlags::NoBan);
+    AddWhitelistPermissionFlags(permission_flags, addr);
+    if (NetPermissions::HasFlag(permission_flags, NetPermissionFlags::Implicit)) {
+        NetPermissions::ClearFlag(permission_flags, NetPermissionFlags::Implicit);
+        if (gArgs.GetBoolArg("-whitelistforcerelay", DEFAULT_WHITELISTFORCERELAY)) NetPermissions::AddFlag(permission_flags, NetPermissionFlags::ForceRelay);
+        if (gArgs.GetBoolArg("-whitelistrelay", DEFAULT_WHITELISTRELAY)) NetPermissions::AddFlag(permission_flags, NetPermissionFlags::Relay);
+        NetPermissions::AddFlag(permission_flags, NetPermissionFlags::Mempool);
+        NetPermissions::AddFlag(permission_flags, NetPermissionFlags::NoBan);
     }
 
     {
@@ -971,8 +971,7 @@ void CConnman::CreateNodeFromAcceptedSocket(std::unique_ptr<Sock>&& sock,
         return;
     }
 
-    if (!IsSelectableSocket(sock->Get()))
-    {
+    if (!sock->IsSelectable()) {
         LogPrintf("connection from %s dropped: non-selectable socket\n", addr.ToString());
         return;
     }
@@ -987,7 +986,7 @@ void CConnman::CreateNodeFromAcceptedSocket(std::unique_ptr<Sock>&& sock,
 
     // Don't accept connections from banned peers.
     bool banned = m_banman && m_banman->IsBanned(addr);
-    if (!NetPermissions::HasFlag(permissionFlags, NetPermissionFlags::NoBan) && banned)
+    if (!NetPermissions::HasFlag(permission_flags, NetPermissionFlags::NoBan) && banned)
     {
         LogPrint(BCLog::NET, "connection from %s dropped (banned)\n", addr.ToString());
         return;
@@ -995,7 +994,7 @@ void CConnman::CreateNodeFromAcceptedSocket(std::unique_ptr<Sock>&& sock,
 
     // Only accept connections from discouraged peers if our inbound slots aren't (almost) full.
     bool discouraged = m_banman && m_banman->IsDiscouraged(addr);
-    if (!NetPermissions::HasFlag(permissionFlags, NetPermissionFlags::NoBan) && nInbound + 1 >= nMaxInbound && discouraged)
+    if (!NetPermissions::HasFlag(permission_flags, NetPermissionFlags::NoBan) && nInbound + 1 >= nMaxInbound && discouraged)
     {
         LogPrint(BCLog::NET, "connection from %s dropped (discouraged)\n", addr.ToString());
         return;
@@ -1014,7 +1013,7 @@ void CConnman::CreateNodeFromAcceptedSocket(std::unique_ptr<Sock>&& sock,
     uint64_t nonce = GetDeterministicRandomizer(RANDOMIZER_ID_LOCALHOSTNONCE).Write(id).Finalize();
 
     ServiceFlags nodeServices = nLocalServices;
-    if (NetPermissions::HasFlag(permissionFlags, NetPermissionFlags::BloomFilter)) {
+    if (NetPermissions::HasFlag(permission_flags, NetPermissionFlags::BloomFilter)) {
         nodeServices = static_cast<ServiceFlags>(nodeServices | NODE_BLOOM);
     }
 
@@ -1027,10 +1026,12 @@ void CConnman::CreateNodeFromAcceptedSocket(std::unique_ptr<Sock>&& sock,
                              addr_bind,
                              /*addrNameIn=*/"",
                              ConnectionType::INBOUND,
-                             inbound_onion);
+                             inbound_onion,
+                             CNodeOptions{
+                               .permission_flags = permission_flags,
+                               .prefer_evict = discouraged,
+                             });
     pnode->AddRef();
-    pnode->m_permissionFlags = permissionFlags;
-    pnode->m_prefer_evict = discouraged;
     m_msgproc->InitializeNode(*pnode, nodeServices);
 
     LogPrint(BCLog::NET, "connection from %s accepted\n", addr.ToString());
@@ -1498,12 +1499,12 @@ void CConnman::ThreadDNSAddressSeed()
 
 void CConnman::DumpAddresses()
 {
-    int64_t nStart = GetTimeMillis();
+    const auto start{SteadyClock::now()};
 
     DumpPeerAddresses(::gArgs, addrman);
 
     LogPrint(BCLog::NET, "Flushed %d addresses to peers.dat  %dms\n",
-           addrman.size(), GetTimeMillis() - nStart);
+             addrman.size(), Ticks<std::chrono::milliseconds>(SteadyClock::now() - start));
 }
 
 void CConnman::ProcessAddrFetch()
@@ -1640,15 +1641,28 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect)
                 LOCK2(m_addr_fetches_mutex, m_added_nodes_mutex);
                 if (m_addr_fetches.empty() && m_added_nodes.empty()) {
                     add_fixed_seeds_now = true;
-                    LogPrintf("Adding fixed seeds as -dnsseed=0, -addnode is not provided and all -seednode(s) attempted\n");
+                    LogPrintf("Adding fixed seeds as -dnsseed=0 (or IPv4/IPv6 connections are disabled via -onlynet), -addnode is not provided and all -seednode(s) attempted\n");
                 }
             }
 
             if (add_fixed_seeds_now) {
+                std::vector<CAddress> seed_addrs{ConvertSeeds(Params().FixedSeeds())};
+                // We will not make outgoing connections to peers that are unreachable
+                // (e.g. because of -onlynet configuration).
+                // Therefore, we do not add them to addrman in the first place.
+                // Note that if you change -onlynet setting from one network to another,
+                // peers.dat will contain only peers of unreachable networks and
+                // manual intervention will be needed (either delete peers.dat after
+                // configuration change or manually add some reachable peer using addnode),
+                // see <https://github.com/bitcoin/bitcoin/issues/26035> for details.
+                seed_addrs.erase(std::remove_if(seed_addrs.begin(), seed_addrs.end(),
+                                               [](const CAddress& addr) { return !IsReachable(addr); }),
+                                seed_addrs.end());
                 CNetAddr local;
                 local.SetInternal("fixedseeds");
-                addrman.Add(ConvertSeeds(Params().FixedSeeds()), local);
+                addrman.Add(seed_addrs, local);
                 add_fixed_seeds = false;
+                LogPrintf("Added %d fixed seeds from reachable networks.\n", seed_addrs.size());
             }
         }
 
@@ -1976,8 +1990,12 @@ void CConnman::OpenNetworkConnection(const CAddress& addrConnect, bool fCountFai
     }
 }
 
+Mutex NetEventsInterface::g_msgproc_mutex;
+
 void CConnman::ThreadMessageHandler()
 {
+    LOCK(NetEventsInterface::g_msgproc_mutex);
+
     SetSyscallSandboxPolicy(SyscallSandboxPolicy::MESSAGE_HANDLER);
     while (!flagInterruptMsgProc)
     {
@@ -1999,10 +2017,7 @@ void CConnman::ThreadMessageHandler()
                 if (flagInterruptMsgProc)
                     return;
                 // Send messages
-                {
-                    LOCK(pnode->cs_sendProcessing);
-                    m_msgproc->SendMessages(pnode);
-                }
+                m_msgproc->SendMessages(pnode);
 
                 if (flagInterruptMsgProc)
                     return;
@@ -2215,9 +2230,6 @@ bool CConnman::Bind(const CService& addr_, unsigned int flags, NetPermissionFlag
 {
     const CService addr{MaybeFlipIPv6toCJDNS(addr_)};
 
-    if (!(flags & BF_EXPLICIT) && !IsReachable(addr)) {
-        return false;
-    }
     bilingual_str strError;
     if (!BindListenPort(addr, strError, permissions)) {
         if ((flags & BF_REPORT_ERROR) && m_client_interface) {
@@ -2237,13 +2249,13 @@ bool CConnman::InitBinds(const Options& options)
 {
     bool fBound = false;
     for (const auto& addrBind : options.vBinds) {
-        fBound |= Bind(addrBind, (BF_EXPLICIT | BF_REPORT_ERROR), NetPermissionFlags::None);
+        fBound |= Bind(addrBind, BF_REPORT_ERROR, NetPermissionFlags::None);
     }
     for (const auto& addrBind : options.vWhiteBinds) {
-        fBound |= Bind(addrBind.m_service, (BF_EXPLICIT | BF_REPORT_ERROR), addrBind.m_flags);
+        fBound |= Bind(addrBind.m_service, BF_REPORT_ERROR, addrBind.m_flags);
     }
     for (const auto& addr_bind : options.onion_binds) {
-        fBound |= Bind(addr_bind, BF_EXPLICIT | BF_DONT_ADVERTISE, NetPermissionFlags::None);
+        fBound |= Bind(addr_bind, BF_DONT_ADVERTISE, NetPermissionFlags::None);
     }
     if (options.bind_on_any) {
         struct in_addr inaddr_any;
@@ -2722,20 +2734,22 @@ CNode::CNode(NodeId idIn,
              const std::string& addrNameIn,
              ConnectionType conn_type_in,
              bool inbound_onion,
-             std::unique_ptr<i2p::sam::Session>&& i2p_sam_session)
+             CNodeOptions&& node_opts)
     : m_deserializer{std::make_unique<V1TransportDeserializer>(V1TransportDeserializer(Params(), idIn, SER_NETWORK, INIT_PROTO_VERSION))},
       m_serializer{std::make_unique<V1TransportSerializer>(V1TransportSerializer())},
+      m_permission_flags{node_opts.permission_flags},
       m_sock{sock},
       m_connected{GetTime<std::chrono::seconds>()},
       addr{addrIn},
       addrBind{addrBindIn},
       m_addr_name{addrNameIn.empty() ? addr.ToStringIPPort() : addrNameIn},
       m_inbound_onion{inbound_onion},
+      m_prefer_evict{node_opts.prefer_evict},
       nKeyedNetGroup{nKeyedNetGroupIn},
       id{idIn},
       nLocalHostNonce{nLocalHostNonceIn},
       m_conn_type{conn_type_in},
-      m_i2p_sam_session{std::move(i2p_sam_session)}
+      m_i2p_sam_session{std::move(node_opts.i2p_sam_session)}
 {
     if (inbound_onion) assert(conn_type_in == ConnectionType::INBOUND);
 

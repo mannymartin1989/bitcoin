@@ -43,6 +43,9 @@ def process_mapping(fname):
 
 
 class HelpRpcTest(BitcoinTestFramework):
+    def add_options(self, parser):
+        self.add_wallet_options(parser)
+
     def set_test_params(self):
         self.num_nodes = 1
         self.supports_cli = False
@@ -92,7 +95,7 @@ class HelpRpcTest(BitcoinTestFramework):
         assert_raises_rpc_error(-1, 'help', node.help, 'foo', 'bar')
 
         # invalid argument
-        assert_raises_rpc_error(-1, "JSON value of type number is not of expected type string", node.help, 0)
+        assert_raises_rpc_error(-3, "JSON value of type number is not of expected type string", node.help, 0)
 
         # help of unknown command
         assert_equal(node.help('foo'), 'help: unknown command: foo')

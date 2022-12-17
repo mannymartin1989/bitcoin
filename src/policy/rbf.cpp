@@ -5,6 +5,7 @@
 #include <policy/rbf.h>
 
 #include <consensus/amount.h>
+#include <kernel/mempool_entry.h>
 #include <policy/feerate.h>
 #include <primitives/transaction.h>
 #include <sync.h>
@@ -36,10 +37,9 @@ RBFTransactionState IsRBFOptIn(const CTransaction& tx, const CTxMemPool& pool)
 
     // If all the inputs have nSequence >= maxint-1, it still might be
     // signaled for RBF if any unconfirmed parents have signaled.
-    uint64_t noLimit = std::numeric_limits<uint64_t>::max();
     std::string dummy;
     CTxMemPoolEntry entry = *pool.mapTx.find(tx.GetHash());
-    pool.CalculateMemPoolAncestors(entry, ancestors, noLimit, noLimit, noLimit, noLimit, dummy, false);
+    pool.CalculateMemPoolAncestors(entry, ancestors, CTxMemPool::Limits::NoLimits(), dummy, false);
 
     for (CTxMemPool::txiter it : ancestors) {
         if (SignalsOptInRBF(it->GetTx())) {

@@ -7,6 +7,8 @@
 
 #include <index/base.h>
 
+static constexpr bool DEFAULT_TXINDEX{false};
+
 /**
  * TxIndex is used to look up transactions included in the blockchain by hash.
  * The index is written to a LevelDB database and records the filesystem
@@ -26,8 +28,6 @@ protected:
     bool CustomAppend(const interfaces::BlockInfo& block) override;
 
     BaseIndex::DB& GetDB() const override;
-
-    const char* GetName() const override { return "txindex"; }
 
 public:
     /// Constructs the index, which becomes available to be queried.
