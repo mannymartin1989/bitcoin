@@ -14,7 +14,6 @@ from test_framework.blocktools import (
     create_block,
     create_coinbase,
 )
-from test_framework.key import ECKey
 from test_framework.messages import (
     MAX_BIP125_RBF_SEQUENCE,
     CBlockHeader,
@@ -72,8 +71,8 @@ from test_framework.script import (
     SIGHASH_NONE,
     SIGHASH_SINGLE,
     SegwitV0SignatureHash,
-    LegacySignatureHash,
     hash160,
+    sign_input_legacy,
 )
 from test_framework.script_util import (
     key_to_p2pk_script,
@@ -89,6 +88,7 @@ from test_framework.util import (
     assert_raises_rpc_error,
 )
 from test_framework.wallet import MiniWallet
+from test_framework.wallet_util import generate_keypair
 
 
 MAX_SIGOP_COST = 80000
@@ -1448,9 +1448,7 @@ class SegWitTest(BitcoinTestFramework):
 
         # Segwit transactions using uncompressed pubkeys are not accepted
         # under default policy, but should still pass consensus.
-        key = ECKey()
-        key.generate(False)
-        pubkey = key.get_pubkey().get_bytes()
+        key, pubkey = generate_keypair(compressed=False)
         assert_equal(len(pubkey), 65)  # This should be an uncompressed pubkey
 
         utxo = self.utxo.pop(0)
@@ -1531,10 +1529,8 @@ class SegWitTest(BitcoinTestFramework):
         tx5 = CTransaction()
         tx5.vin.append(CTxIn(COutPoint(tx4.sha256, 0), b""))
         tx5.vout.append(CTxOut(tx4.vout[0].nValue - 1000, CScript([OP_TRUE])))
-        (sig_hash, err) = LegacySignatureHash(script_pubkey, tx5, 0, SIGHASH_ALL)
-        signature = key.sign_ecdsa(sig_hash) + b'\x01'  # 0x1 is SIGHASH_ALL
-        tx5.vin[0].scriptSig = CScript([signature, pubkey])
-        tx5.rehash()
+        tx5.vin[0].scriptSig = CScript([pubkey])
+        sign_input_legacy(tx5, 0, script_pubkey, key)
         # Should pass policy and consensus.
         test_transaction_acceptance(self.nodes[0], self.test_node, tx5, True, True)
         block = self.build_next_block()
@@ -1544,11 +1540,7 @@ class SegWitTest(BitcoinTestFramework):
 
     @subtest
     def test_signature_version_1(self):
-
-        key = ECKey()
-        key.generate()
-        pubkey = key.get_pubkey().get_bytes()
-
+        key, pubkey = generate_keypair()
         witness_script = key_to_p2pk_script(pubkey)
         script_pubkey = script_to_p2wsh_script(witness_script)
 

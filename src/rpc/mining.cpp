@@ -5,6 +5,7 @@
 
 #include <chain.h>
 #include <chainparams.h>
+#include <common/system.h>
 #include <consensus/amount.h>
 #include <consensus/consensus.h>
 #include <consensus/merkle.h>
@@ -32,7 +33,6 @@
 #include <univalue.h>
 #include <util/strencodings.h>
 #include <util/string.h>
-#include <util/system.h>
 #include <util/translation.h>
 #include <validation.h>
 #include <validationinterface.h>
@@ -115,9 +115,9 @@ static RPCHelpMan getnetworkhashps()
     };
 }
 
-static bool GenerateBlock(ChainstateManager& chainman, CBlock& block, uint64_t& max_tries, uint256& block_hash)
+static bool GenerateBlock(ChainstateManager& chainman, CBlock& block, uint64_t& max_tries, std::shared_ptr<const CBlock>& block_out, bool process_new_block)
 {
-    block_hash.SetNull();
+    block_out.reset();
     block.hashMerkleRoot = BlockMerkleRoot(block);
 
     while (max_tries > 0 && block.nNonce < std::numeric_limits<uint32_t>::max() && !CheckProofOfWork(block.GetHash(), block.nBits, chainman.GetConsensus()) && !ShutdownRequested()) {
@@ -131,12 +131,14 @@ static bool GenerateBlock(ChainstateManager& chainman, CBlock& block, uint64_t& 
         return true;
     }
 
-    std::shared_ptr<const CBlock> shared_pblock = std::make_shared<const CBlock>(block);
-    if (!chainman.ProcessNewBlock(shared_pblock, /*force_processing=*/true, /*min_pow_checked=*/true, nullptr)) {
+    block_out = std::make_shared<const CBlock>(block);
+
+    if (!process_new_block) return true;
+
+    if (!chainman.ProcessNewBlock(block_out, /*force_processing=*/true, /*min_pow_checked=*/true, nullptr)) {
         throw JSONRPCError(RPC_INTERNAL_ERROR, "ProcessNewBlock, block not accepted");
     }
 
-    block_hash = block.GetHash();
     return true;
 }
 
@@ -147,16 +149,15 @@ static UniValue generateBlocks(ChainstateManager& chainman, const CTxMemPool& me
         std::unique_ptr<CBlockTemplate> pblocktemplate(BlockAssembler{chainman.ActiveChainstate(), &mempool}.CreateNewBlock(coinbase_script));
         if (!pblocktemplate.get())
             throw JSONRPCError(RPC_INTERNAL_ERROR, "Couldn't create new block");
-        CBlock *pblock = &pblocktemplate->block;
 
-        uint256 block_hash;
-        if (!GenerateBlock(chainman, *pblock, nMaxTries, block_hash)) {
+        std::shared_ptr<const CBlock> block_out;
+        if (!GenerateBlock(chainman, pblocktemplate->block, nMaxTries, block_out, /*process_new_block=*/true)) {
             break;
         }
 
-        if (!block_hash.IsNull()) {
+        if (block_out) {
             --nGenerate;
-            blockHashes.push_back(block_hash.GetHex());
+            blockHashes.push_back(block_out->GetHash().GetHex());
         }
     }
     return blockHashes;
@@ -295,11 +296,13 @@ static RPCHelpMan generateblock()
                     {"rawtx/txid", RPCArg::Type::STR_HEX, RPCArg::Optional::OMITTED, ""},
                 },
             },
+            {"submit", RPCArg::Type::BOOL, RPCArg::Default{true}, "Whether to submit the block before the RPC call returns or to return it as hex."},
         },
         RPCResult{
             RPCResult::Type::OBJ, "", "",
             {
                 {RPCResult::Type::STR_HEX, "hash", "hash of generated block"},
+                {RPCResult::Type::STR_HEX, "hex", /*optional=*/true, "hex of generated block, only present when submit=false"},
             }
         },
         RPCExamples{
@@ -348,6 +351,7 @@ static RPCHelpMan generateblock()
         }
     }
 
+    const bool process_new_block{request.params[2].isNull() ? true : request.params[2].get_bool()};
     CBlock block;
 
     ChainstateManager& chainman = EnsureChainman(node);
@@ -376,15 +380,20 @@ static RPCHelpMan generateblock()
         }
     }
 
-    uint256 block_hash;
+    std::shared_ptr<const CBlock> block_out;
     uint64_t max_tries{DEFAULT_MAX_TRIES};
 
-    if (!GenerateBlock(chainman, block, max_tries, block_hash) || block_hash.IsNull()) {
+    if (!GenerateBlock(chainman, block, max_tries, block_out, process_new_block) || !block_out) {
         throw JSONRPCError(RPC_MISC_ERROR, "Failed to make block.");
     }
 
     UniValue obj(UniValue::VOBJ);
-    obj.pushKV("hash", block_hash.GetHex());
+    obj.pushKV("hash", block_out->GetHash().GetHex());
+    if (!process_new_block) {
+        CDataStream block_ser{SER_NETWORK, PROTOCOL_VERSION | RPCSerializationFlags()};
+        block_ser << *block_out;
+        obj.pushKV("hex", HexStr(block_ser));
+    }
     return obj;
 },
     };
@@ -426,7 +435,7 @@ static RPCHelpMan getmininginfo()
     obj.pushKV("difficulty",       (double)GetDifficulty(active_chain.Tip()));
     obj.pushKV("networkhashps",    getnetworkhashps().HandleRequest(request));
     obj.pushKV("pooledtx",         (uint64_t)mempool.size());
-    obj.pushKV("chain", chainman.GetParams().NetworkIDString());
+    obj.pushKV("chain", chainman.GetParams().GetChainTypeString());
     obj.pushKV("warnings",         GetWarnings(false).original);
     return obj;
 },
@@ -468,6 +477,40 @@ static RPCHelpMan prioritisetransaction()
     EnsureAnyMemPool(request.context).PrioritiseTransaction(hash, nAmount);
     return true;
 },
+    };
+}
+
+static RPCHelpMan getprioritisedtransactions()
+{
+    return RPCHelpMan{"getprioritisedtransactions",
+        "Returns a map of all user-created (see prioritisetransaction) fee deltas by txid, and whether the tx is present in mempool.",
+        {},
+        RPCResult{
+            RPCResult::Type::OBJ_DYN, "prioritisation-map", "prioritisation keyed by txid",
+            {
+                {RPCResult::Type::OBJ, "txid", "", {
+                    {RPCResult::Type::NUM, "fee_delta", "transaction fee delta in satoshis"},
+                    {RPCResult::Type::BOOL, "in_mempool", "whether this transaction is currently in mempool"},
+                }}
+            },
+        },
+        RPCExamples{
+            HelpExampleCli("getprioritisedtransactions", "")
+            + HelpExampleRpc("getprioritisedtransactions", "")
+        },
+        [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
+        {
+            NodeContext& node = EnsureAnyNodeContext(request.context);
+            CTxMemPool& mempool = EnsureMemPool(node);
+            UniValue rpc_result{UniValue::VOBJ};
+            for (const auto& delta_info : mempool.GetPrioritisedTransactions()) {
+                UniValue result_inner{UniValue::VOBJ};
+                result_inner.pushKV("fee_delta", delta_info.delta);
+                result_inner.pushKV("in_mempool", delta_info.in_mempool);
+                rpc_result.pushKV(delta_info.txid.GetHex(), result_inner);
+            }
+            return rpc_result;
+        },
     };
 }
 
@@ -603,7 +646,7 @@ static RPCHelpMan getblocktemplate()
     if (!request.params[0].isNull())
     {
         const UniValue& oparam = request.params[0].get_obj();
-        const UniValue& modeval = find_value(oparam, "mode");
+        const UniValue& modeval = oparam.find_value("mode");
         if (modeval.isStr())
             strMode = modeval.get_str();
         else if (modeval.isNull())
@@ -612,11 +655,11 @@ static RPCHelpMan getblocktemplate()
         }
         else
             throw JSONRPCError(RPC_INVALID_PARAMETER, "Invalid mode");
-        lpval = find_value(oparam, "longpollid");
+        lpval = oparam.find_value("longpollid");
 
         if (strMode == "proposal")
         {
-            const UniValue& dataval = find_value(oparam, "data");
+            const UniValue& dataval = oparam.find_value("data");
             if (!dataval.isStr())
                 throw JSONRPCError(RPC_TYPE_ERROR, "Missing data String key for proposal");
 
@@ -643,7 +686,7 @@ static RPCHelpMan getblocktemplate()
             return BIP22ValidationResult(state);
         }
 
-        const UniValue& aClientRules = find_value(oparam, "rules");
+        const UniValue& aClientRules = oparam.find_value("rules");
         if (aClientRules.isArray()) {
             for (unsigned int i = 0; i < aClientRules.size(); ++i) {
                 const UniValue& v = aClientRules[i];
@@ -1039,6 +1082,7 @@ void RegisterMiningRPCCommands(CRPCTable& t)
         {"mining", &getnetworkhashps},
         {"mining", &getmininginfo},
         {"mining", &prioritisetransaction},
+        {"mining", &getprioritisedtransactions},
         {"mining", &getblocktemplate},
         {"mining", &submitblock},
         {"mining", &submitheader},

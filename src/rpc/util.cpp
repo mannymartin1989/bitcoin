@@ -3,6 +3,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <clientversion.h>
+#include <common/args.h>
 #include <consensus/amount.h>
 #include <key_io.h>
 #include <outputtype.h>
@@ -13,7 +14,6 @@
 #include <util/check.h>
 #include <util/strencodings.h>
 #include <util/string.h>
-#include <util/system.h>
 #include <util/translation.h>
 
 #include <tuple>
@@ -37,7 +37,7 @@ void RPCTypeCheckObj(const UniValue& o,
     bool fStrict)
 {
     for (const auto& t : typesExpected) {
-        const UniValue& v = find_value(o, t.first);
+        const UniValue& v = o.find_value(t.first);
         if (!fAllowNull && v.isNull())
             throw JSONRPCError(RPC_TYPE_ERROR, strprintf("Missing %s", t.first));
 
@@ -81,7 +81,7 @@ uint256 ParseHashV(const UniValue& v, std::string strName)
 }
 uint256 ParseHashO(const UniValue& o, std::string strKey)
 {
-    return ParseHashV(find_value(o, strKey), strKey);
+    return ParseHashV(o.find_value(strKey), strKey);
 }
 std::vector<unsigned char> ParseHexV(const UniValue& v, std::string strName)
 {
@@ -94,7 +94,7 @@ std::vector<unsigned char> ParseHexV(const UniValue& v, std::string strName)
 }
 std::vector<unsigned char> ParseHexO(const UniValue& o, std::string strKey)
 {
-    return ParseHexV(find_value(o, strKey), strKey);
+    return ParseHexV(o.find_value(strKey), strKey);
 }
 
 namespace {
@@ -389,7 +389,8 @@ struct Sections {
         case RPCArg::Type::NUM:
         case RPCArg::Type::AMOUNT:
         case RPCArg::Type::RANGE:
-        case RPCArg::Type::BOOL: {
+        case RPCArg::Type::BOOL:
+        case RPCArg::Type::OBJ_NAMED_PARAMS: {
             if (is_top_level_arg) return; // Nothing more to do for non-recursive types on first recursion
             auto left = indent;
             if (arg.m_opts.type_str.size() != 0 && push_name) {
@@ -485,12 +486,32 @@ RPCHelpMan::RPCHelpMan(std::string name, std::string description, std::vector<RP
       m_results{std::move(results)},
       m_examples{std::move(examples)}
 {
-    std::set<std::string> named_args;
+    // Map of parameter names and types just used to check whether the names are
+    // unique. Parameter names always need to be unique, with the exception that
+    // there can be pairs of POSITIONAL and NAMED parameters with the same name.
+    enum ParamType { POSITIONAL = 1, NAMED = 2, NAMED_ONLY = 4 };
+    std::map<std::string, int> param_names;
+
     for (const auto& arg : m_args) {
         std::vector<std::string> names = SplitString(arg.m_names, '|');
         // Should have unique named arguments
         for (const std::string& name : names) {
-            CHECK_NONFATAL(named_args.insert(name).second);
+            auto& param_type = param_names[name];
+            CHECK_NONFATAL(!(param_type & POSITIONAL));
+            CHECK_NONFATAL(!(param_type & NAMED_ONLY));
+            param_type |= POSITIONAL;
+        }
+        if (arg.m_type == RPCArg::Type::OBJ_NAMED_PARAMS) {
+            for (const auto& inner : arg.m_inner) {
+                std::vector<std::string> inner_names = SplitString(inner.m_names, '|');
+                for (const std::string& inner_name : inner_names) {
+                    auto& param_type = param_names[inner_name];
+                    CHECK_NONFATAL(!(param_type & POSITIONAL) || inner.m_opts.also_positional);
+                    CHECK_NONFATAL(!(param_type & NAMED));
+                    CHECK_NONFATAL(!(param_type & NAMED_ONLY));
+                    param_type |= inner.m_opts.also_positional ? NAMED : NAMED_ONLY;
+                }
+            }
         }
         // Default value type should match argument type only when defined
         if (arg.m_fallback.index() == 2) {
@@ -605,11 +626,17 @@ bool RPCHelpMan::IsValidNumArgs(size_t num_args) const
     return num_required_args <= num_args && num_args <= m_args.size();
 }
 
-std::vector<std::string> RPCHelpMan::GetArgNames() const
+std::vector<std::pair<std::string, bool>> RPCHelpMan::GetArgNames() const
 {
-    std::vector<std::string> ret;
+    std::vector<std::pair<std::string, bool>> ret;
+    ret.reserve(m_args.size());
     for (const auto& arg : m_args) {
-        ret.emplace_back(arg.m_names);
+        if (arg.m_type == RPCArg::Type::OBJ_NAMED_PARAMS) {
+            for (const auto& inner : arg.m_inner) {
+                ret.emplace_back(inner.m_names, /*named_only=*/true);
+            }
+        }
+        ret.emplace_back(arg.m_names, /*named_only=*/false);
     }
     return ret;
 }
@@ -641,11 +668,10 @@ std::string RPCHelpMan::ToString() const
 
     // Arguments
     Sections sections;
+    Sections named_only_sections;
     for (size_t i{0}; i < m_args.size(); ++i) {
         const auto& arg = m_args.at(i);
         if (arg.m_opts.hidden) break; // Any arg that follows is also hidden
-
-        if (i == 0) ret += "\nArguments:\n";
 
         // Push named argument name and description
         sections.m_sections.emplace_back(::ToString(i + 1) + ". " + arg.GetFirstName(), arg.ToDescriptionString(/*is_named_arg=*/true));
@@ -653,8 +679,20 @@ std::string RPCHelpMan::ToString() const
 
         // Recursively push nested args
         sections.Push(arg);
+
+        // Push named-only argument sections
+        if (arg.m_type == RPCArg::Type::OBJ_NAMED_PARAMS) {
+            for (const auto& arg_inner : arg.m_inner) {
+                named_only_sections.PushSection({arg_inner.GetFirstName(), arg_inner.ToDescriptionString(/*is_named_arg=*/true)});
+                named_only_sections.Push(arg_inner);
+            }
+        }
     }
+
+    if (!sections.m_sections.empty()) ret += "\nArguments:\n";
     ret += sections.ToString();
+    if (!named_only_sections.m_sections.empty()) ret += "\nNamed Arguments:\n";
+    ret += named_only_sections.ToString();
 
     // Result
     ret += m_results.ToDescriptionString();
@@ -668,17 +706,30 @@ std::string RPCHelpMan::ToString() const
 UniValue RPCHelpMan::GetArgMap() const
 {
     UniValue arr{UniValue::VARR};
+
+    auto push_back_arg_info = [&arr](const std::string& rpc_name, int pos, const std::string& arg_name, const RPCArg::Type& type) {
+        UniValue map{UniValue::VARR};
+        map.push_back(rpc_name);
+        map.push_back(pos);
+        map.push_back(arg_name);
+        map.push_back(type == RPCArg::Type::STR ||
+                      type == RPCArg::Type::STR_HEX);
+        arr.push_back(map);
+    };
+
     for (int i{0}; i < int(m_args.size()); ++i) {
         const auto& arg = m_args.at(i);
         std::vector<std::string> arg_names = SplitString(arg.m_names, '|');
         for (const auto& arg_name : arg_names) {
-            UniValue map{UniValue::VARR};
-            map.push_back(m_name);
-            map.push_back(i);
-            map.push_back(arg_name);
-            map.push_back(arg.m_type == RPCArg::Type::STR ||
-                          arg.m_type == RPCArg::Type::STR_HEX);
-            arr.push_back(map);
+            push_back_arg_info(m_name, i, arg_name, arg.m_type);
+            if (arg.m_type == RPCArg::Type::OBJ_NAMED_PARAMS) {
+                for (const auto& inner : arg.m_inner) {
+                    std::vector<std::string> inner_names = SplitString(inner.m_names, '|');
+                    for (const std::string& inner_name : inner_names) {
+                        push_back_arg_info(m_name, i, inner_name, inner.m_type);
+                    }
+                }
+            }
         }
     }
     return arr;
@@ -707,6 +758,7 @@ static std::optional<UniValue::VType> ExpectedType(RPCArg::Type type)
         return UniValue::VBOOL;
     }
     case Type::OBJ:
+    case Type::OBJ_NAMED_PARAMS:
     case Type::OBJ_USER_KEYS: {
         return UniValue::VOBJ;
     }
@@ -732,12 +784,12 @@ UniValue RPCArg::MatchesType(const UniValue& request) const
 
 std::string RPCArg::GetFirstName() const
 {
-    return m_names.substr(0, m_names.find("|"));
+    return m_names.substr(0, m_names.find('|'));
 }
 
 std::string RPCArg::GetName() const
 {
-    CHECK_NONFATAL(std::string::npos == m_names.find("|"));
+    CHECK_NONFATAL(std::string::npos == m_names.find('|'));
     return m_names;
 }
 
@@ -780,6 +832,7 @@ std::string RPCArg::ToDescriptionString(bool is_named_arg) const
             break;
         }
         case Type::OBJ:
+        case Type::OBJ_NAMED_PARAMS:
         case Type::OBJ_USER_KEYS: {
             ret += "json object";
             break;
@@ -808,6 +861,7 @@ std::string RPCArg::ToDescriptionString(bool is_named_arg) const
         } // no default case, so the compiler can warn about missing cases
     }
     ret += ")";
+    if (m_type == Type::OBJ_NAMED_PARAMS) ret += " Options object that can be used to pass named arguments, listed below.";
     ret += m_description.empty() ? "" : " " + m_description;
     return ret;
 }
@@ -1053,6 +1107,7 @@ std::string RPCArg::ToStringObj(const bool oneline) const
         }
         return res + "...]";
     case Type::OBJ:
+    case Type::OBJ_NAMED_PARAMS:
     case Type::OBJ_USER_KEYS:
         // Currently unused, so avoid writing dead code
         NONFATAL_UNREACHABLE();
@@ -1076,6 +1131,7 @@ std::string RPCArg::ToString(const bool oneline) const
         return GetFirstName();
     }
     case Type::OBJ:
+    case Type::OBJ_NAMED_PARAMS:
     case Type::OBJ_USER_KEYS: {
         const std::string res = Join(m_inner, ",", [&](const RPCArg& i) { return i.ToStringObj(oneline); });
         if (m_type == Type::OBJ) {
@@ -1125,17 +1181,17 @@ std::pair<int64_t, int64_t> ParseDescriptorRange(const UniValue& value)
     return {low, high};
 }
 
-std::vector<CScript> EvalDescriptorStringOrObject(const UniValue& scanobject, FlatSigningProvider& provider)
+std::vector<CScript> EvalDescriptorStringOrObject(const UniValue& scanobject, FlatSigningProvider& provider, const bool expand_priv)
 {
     std::string desc_str;
     std::pair<int64_t, int64_t> range = {0, 1000};
     if (scanobject.isStr()) {
         desc_str = scanobject.get_str();
     } else if (scanobject.isObject()) {
-        UniValue desc_uni = find_value(scanobject, "desc");
+        const UniValue& desc_uni{scanobject.find_value("desc")};
         if (desc_uni.isNull()) throw JSONRPCError(RPC_INVALID_PARAMETER, "Descriptor needs to be provided in scan object");
         desc_str = desc_uni.get_str();
-        UniValue range_uni = find_value(scanobject, "range");
+        const UniValue& range_uni{scanobject.find_value("range")};
         if (!range_uni.isNull()) {
             range = ParseDescriptorRange(range_uni);
         }
@@ -1158,6 +1214,9 @@ std::vector<CScript> EvalDescriptorStringOrObject(const UniValue& scanobject, Fl
         if (!desc->Expand(i, provider, scripts, provider)) {
             throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, strprintf("Cannot derive script without private keys: '%s'", desc_str));
         }
+        if (expand_priv) {
+            desc->ExpandPrivate(/*pos=*/i, provider, /*out=*/provider);
+        }
         std::move(scripts.begin(), scripts.end(), std::back_inserter(ret));
     }
     return ret;
@@ -1172,4 +1231,27 @@ UniValue GetServicesNames(ServiceFlags services)
     }
 
     return servicesNames;
+}
+
+/** Convert a vector of bilingual strings to a UniValue::VARR containing their original untranslated values. */
+[[nodiscard]] static UniValue BilingualStringsToUniValue(const std::vector<bilingual_str>& bilingual_strings)
+{
+    CHECK_NONFATAL(!bilingual_strings.empty());
+    UniValue result{UniValue::VARR};
+    for (const auto& s : bilingual_strings) {
+        result.push_back(s.original);
+    }
+    return result;
+}
+
+void PushWarnings(const UniValue& warnings, UniValue& obj)
+{
+    if (warnings.empty()) return;
+    obj.pushKV("warnings", warnings);
+}
+
+void PushWarnings(const std::vector<bilingual_str>& warnings, UniValue& obj)
+{
+    if (warnings.empty()) return;
+    obj.pushKV("warnings", BilingualStringsToUniValue(warnings));
 }

@@ -33,11 +33,12 @@ class BackwardsCompatibilityTest(BitcoinTestFramework):
 
     def set_test_params(self):
         self.setup_clean_chain = True
-        self.num_nodes = 10
+        self.num_nodes = 11
         # Add new version after each release:
         self.extra_args = [
             ["-addresstype=bech32", "-whitelist=noban@127.0.0.1"], # Pre-release: use to mine blocks. noban for immediate tx relay
             ["-nowallet", "-walletrbf=1", "-addresstype=bech32", "-whitelist=noban@127.0.0.1"], # Pre-release: use to receive coins, swap wallets, etc
+            ["-nowallet", "-walletrbf=1", "-addresstype=bech32", "-whitelist=noban@127.0.0.1"], # v24.0.1
             ["-nowallet", "-walletrbf=1", "-addresstype=bech32", "-whitelist=noban@127.0.0.1"], # v23.0
             ["-nowallet", "-walletrbf=1", "-addresstype=bech32", "-whitelist=noban@127.0.0.1"], # v22.0
             ["-nowallet", "-walletrbf=1", "-addresstype=bech32", "-whitelist=noban@127.0.0.1"], # v0.21.0
@@ -57,6 +58,7 @@ class BackwardsCompatibilityTest(BitcoinTestFramework):
         self.add_nodes(self.num_nodes, extra_args=self.extra_args, versions=[
             None,
             None,
+            240001,
             230000,
             220000,
             210000,
@@ -72,8 +74,8 @@ class BackwardsCompatibilityTest(BitcoinTestFramework):
 
     def nodes_wallet_dir(self, node):
         if node.version < 170000:
-            return os.path.join(node.datadir, "regtest")
-        return os.path.join(node.datadir, "regtest/wallets")
+            return node.chain_path
+        return node.wallets_path
 
     def run_test(self):
         node_miner = self.nodes[0]
@@ -155,10 +157,10 @@ class BackwardsCompatibilityTest(BitcoinTestFramework):
         assert info['keypoolsize'] == 0
 
         # Unload wallets and copy to older nodes:
-        node_master_wallets_dir = os.path.join(node_master.datadir, "regtest/wallets")
-        node_v19_wallets_dir = os.path.join(node_v19.datadir, "regtest/wallets")
-        node_v17_wallets_dir = os.path.join(node_v17.datadir, "regtest/wallets")
-        node_v16_wallets_dir = os.path.join(node_v16.datadir, "regtest")
+        node_master_wallets_dir = node_master.wallets_path
+        node_v19_wallets_dir = node_v19.wallets_path
+        node_v17_wallets_dir = node_v17.wallets_path
+        node_v16_wallets_dir = node_v16.chain_path
         node_master.unloadwallet("w1")
         node_master.unloadwallet("w2")
         node_master.unloadwallet("w3")
@@ -251,7 +253,7 @@ class BackwardsCompatibilityTest(BitcoinTestFramework):
         wallet = node_v17.get_wallet_rpc("u1_v17")
         address = wallet.getnewaddress("bech32")
         v17_info = wallet.getaddressinfo(address)
-        hdkeypath = v17_info["hdkeypath"]
+        hdkeypath = v17_info["hdkeypath"].replace("'", "h")
         pubkey = v17_info["pubkey"]
 
         if self.is_bdb_compiled():
@@ -262,8 +264,14 @@ class BackwardsCompatibilityTest(BitcoinTestFramework):
                 os.path.join(node_master_wallets_dir, "u1_v16")
             )
             load_res = node_master.loadwallet("u1_v16")
-            # Make sure this wallet opens without warnings. See https://github.com/bitcoin/bitcoin/pull/19054
-            assert_equal(load_res['warning'], '')
+            # Make sure this wallet opens with only the migration warning. See https://github.com/bitcoin/bitcoin/pull/19054
+            if int(node_master.getnetworkinfo()["version"]) >= 249900:
+                # loadwallet#warnings (added in v25) -- only present if there is a warning
+                # Legacy wallets will have only a deprecation warning
+                assert_equal(load_res["warnings"], ["Wallet loaded successfully. The legacy wallet type is being deprecated and support for creating and opening legacy wallets will be removed in the future. Legacy wallets can be migrated to a descriptor wallet with migratewallet."])
+            else:
+                # loadwallet#warning (deprecated in v25) -- always present, but empty string if no warning
+                assert_equal(load_res["warning"], '')
             wallet = node_master.get_wallet_rpc("u1_v16")
             info = wallet.getaddressinfo(v16_addr)
             descriptor = f"wpkh([{info['hdmasterfingerprint']}{hdkeypath[1:]}]{v16_pubkey})"

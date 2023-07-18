@@ -24,7 +24,7 @@ const TestingSetup* g_setup;
 void initialize_process_messages()
 {
     static const auto testing_setup = MakeNoLogFileContext<const TestingSetup>(
-            /*chain_name=*/CBaseChainParams::REGTEST,
+            /*chain_type=*/ChainType::REGTEST,
             /*extra_args=*/{"-txreconciliation"});
     g_setup = testing_setup.get();
     for (int i = 0; i < 2 * COINBASE_MATURITY; i++) {
@@ -33,7 +33,7 @@ void initialize_process_messages()
     SyncWithValidationInterfaceQueue();
 }
 
-FUZZ_TARGET_INIT(process_messages, initialize_process_messages)
+FUZZ_TARGET(process_messages, .init = initialize_process_messages)
 {
     FuzzedDataProvider fuzzed_data_provider(buffer.data(), buffer.size());
 

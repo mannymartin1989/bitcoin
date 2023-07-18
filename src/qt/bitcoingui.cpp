@@ -30,15 +30,16 @@
 #include <qt/macdockiconhandler.h>
 #endif
 
-#include <functional>
 #include <chain.h>
 #include <chainparams.h>
+#include <common/system.h>
 #include <interfaces/handler.h>
 #include <interfaces/node.h>
 #include <node/interface_ui.h>
-#include <util/system.h>
 #include <util/translation.h>
 #include <validation.h>
+
+#include <functional>
 
 #include <QAction>
 #include <QActionGroup>
@@ -411,6 +412,7 @@ void BitcoinGUI::createActions()
                 connect(action, &QAction::triggered, [this, path] {
                     auto activity = new OpenWalletActivity(m_wallet_controller, this);
                     connect(activity, &OpenWalletActivity::opened, this, &BitcoinGUI::setCurrentWallet, Qt::QueuedConnection);
+                    connect(activity, &OpenWalletActivity::opened, rpcConsole, &RPCConsole::setCurrentWallet, Qt::QueuedConnection);
                     activity->open(path);
                 });
             }
@@ -440,6 +442,7 @@ void BitcoinGUI::createActions()
 
             auto activity = new RestoreWalletActivity(m_wallet_controller, this);
             connect(activity, &RestoreWalletActivity::restored, this, &BitcoinGUI::setCurrentWallet, Qt::QueuedConnection);
+            connect(activity, &RestoreWalletActivity::restored, rpcConsole, &RPCConsole::setCurrentWallet, Qt::QueuedConnection);
 
             auto backup_file_path = fs::PathFromString(backup_file.toStdString());
             activity->restore(backup_file_path, wallet_name.toStdString());
@@ -450,12 +453,14 @@ void BitcoinGUI::createActions()
         connect(m_create_wallet_action, &QAction::triggered, [this] {
             auto activity = new CreateWalletActivity(m_wallet_controller, this);
             connect(activity, &CreateWalletActivity::created, this, &BitcoinGUI::setCurrentWallet);
+            connect(activity, &CreateWalletActivity::created, rpcConsole, &RPCConsole::setCurrentWallet);
             activity->create();
         });
         connect(m_close_all_wallets_action, &QAction::triggered, [this] {
             m_wallet_controller->closeAllWallets(this);
         });
         connect(m_mask_values_action, &QAction::toggled, this, &BitcoinGUI::setPrivacy);
+        connect(m_mask_values_action, &QAction::toggled, this, &BitcoinGUI::enableHistoryAction);
     }
 #endif // ENABLE_WALLET
 
@@ -668,6 +673,12 @@ void BitcoinGUI::setClientModel(ClientModel *_clientModel, interfaces::BlockAndH
 }
 
 #ifdef ENABLE_WALLET
+void BitcoinGUI::enableHistoryAction(bool privacy)
+{
+    historyAction->setEnabled(!privacy);
+    if (historyAction->isChecked()) gotoOverviewPage();
+}
+
 void BitcoinGUI::setWalletController(WalletController* wallet_controller)
 {
     assert(!m_wallet_controller);
@@ -682,6 +693,10 @@ void BitcoinGUI::setWalletController(WalletController* wallet_controller)
 
     GUIUtil::ExceptionSafeConnect(wallet_controller, &WalletController::walletAdded, this, &BitcoinGUI::addWallet);
     connect(wallet_controller, &WalletController::walletRemoved, this, &BitcoinGUI::removeWallet);
+    connect(wallet_controller, &WalletController::destroyed, this, [this] {
+        // wallet_controller gets destroyed manually, but it leaves our member copy dangling
+        m_wallet_controller = nullptr;
+    });
 
     auto activity = new LoadWalletsActivity(m_wallet_controller, this);
     activity->load();
@@ -694,7 +709,7 @@ WalletController* BitcoinGUI::getWalletController()
 
 void BitcoinGUI::addWallet(WalletModel* walletModel)
 {
-    if (!walletFrame) return;
+    if (!walletFrame || !m_wallet_controller) return;
 
     WalletView* wallet_view = new WalletView(walletModel, platformStyle, walletFrame);
     if (!walletFrame->addView(wallet_view)) return;
@@ -716,7 +731,9 @@ void BitcoinGUI::addWallet(WalletModel* walletModel)
     connect(wallet_view, &WalletView::encryptionStatusChanged, this, &BitcoinGUI::updateWalletStatus);
     connect(wallet_view, &WalletView::incomingTransaction, this, &BitcoinGUI::incomingTransaction);
     connect(this, &BitcoinGUI::setPrivacy, wallet_view, &WalletView::setPrivacy);
-    wallet_view->setPrivacy(isPrivacyModeActivated());
+    const bool privacy = isPrivacyModeActivated();
+    wallet_view->setPrivacy(privacy);
+    enableHistoryAction(privacy);
     const QString display_name = walletModel->getDisplayName();
     m_wallet_selector->addItem(display_name, QVariant::fromValue(walletModel));
 }
@@ -744,7 +761,7 @@ void BitcoinGUI::removeWallet(WalletModel* walletModel)
 
 void BitcoinGUI::setCurrentWallet(WalletModel* wallet_model)
 {
-    if (!walletFrame) return;
+    if (!walletFrame || !m_wallet_controller) return;
     walletFrame->setCurrentWallet(wallet_model);
     for (int index = 0; index < m_wallet_selector->count(); ++index) {
         if (m_wallet_selector->itemData(index).value<WalletModel*>() == wallet_model) {

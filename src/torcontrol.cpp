@@ -7,15 +7,15 @@
 
 #include <chainparams.h>
 #include <chainparamsbase.h>
+#include <common/args.h>
 #include <compat/compat.h>
 #include <crypto/hmac_sha256.h>
+#include <logging.h>
 #include <net.h>
 #include <netaddress.h>
 #include <netbase.h>
 #include <util/readwritefile.h>
 #include <util/strencodings.h>
-#include <util/syscall_sandbox.h>
-#include <util/system.h>
 #include <util/thread.h>
 #include <util/time.h>
 
@@ -132,15 +132,15 @@ bool TorControlConnection::Connect(const std::string& tor_control_center, const 
         Disconnect();
     }
 
-    CService control_service;
-    if (!Lookup(tor_control_center, control_service, 9051, fNameLookup)) {
+    const std::optional<CService> control_service{Lookup(tor_control_center, 9051, fNameLookup)};
+    if (!control_service.has_value()) {
         LogPrintf("tor: Failed to look up control center %s\n", tor_control_center);
         return false;
     }
 
     struct sockaddr_storage control_address;
     socklen_t control_address_len = sizeof(control_address);
-    if (!control_service.GetSockAddr(reinterpret_cast<struct sockaddr*>(&control_address), &control_address_len)) {
+    if (!control_service.value().GetSockAddr(reinterpret_cast<struct sockaddr*>(&control_address), &control_address_len)) {
         LogPrintf("tor: Error parsing socket address %s\n", tor_control_center);
         return false;
     }
@@ -380,7 +380,7 @@ void TorController::get_socks_cb(TorControlConnection& _conn, const TorControlRe
     }
 
     Assume(resolved.IsValid());
-    LogPrint(BCLog::TOR, "Configuring onion proxy for %s\n", resolved.ToStringIPPort());
+    LogPrint(BCLog::TOR, "Configuring onion proxy for %s\n", resolved.ToStringAddrPort());
     Proxy addrOnion = Proxy(resolved, true);
     SetProxy(NET_ONION, addrOnion);
 
@@ -421,7 +421,7 @@ void TorController::add_onion_cb(TorControlConnection& _conn, const TorControlRe
             return;
         }
         service = LookupNumeric(std::string(service_id+".onion"), Params().GetDefaultPort());
-        LogPrintfCategory(BCLog::TOR, "Got service ID %s, advertising service %s\n", service_id, service.ToString());
+        LogPrintfCategory(BCLog::TOR, "Got service ID %s, advertising service %s\n", service_id, service.ToStringAddrPort());
         if (WriteBinaryFile(GetPrivateKeyFile(), private_key)) {
             LogPrint(BCLog::TOR, "Cached service private key to %s\n", fs::PathToString(GetPrivateKeyFile()));
         } else {
@@ -453,7 +453,7 @@ void TorController::auth_cb(TorControlConnection& _conn, const TorControlReply& 
         }
         // Request onion service, redirect port.
         // Note that the 'virtual' port is always the default port to avoid decloaking nodes using other ports.
-        _conn.Command(strprintf("ADD_ONION %s Port=%i,%s", private_key, Params().GetDefaultPort(), m_target.ToStringIPPort()),
+        _conn.Command(strprintf("ADD_ONION %s Port=%i,%s", private_key, Params().GetDefaultPort(), m_target.ToStringAddrPort()),
             std::bind(&TorController::add_onion_cb, this, std::placeholders::_1, std::placeholders::_2));
     } else {
         LogPrintf("tor: Authentication failed\n");
@@ -652,7 +652,6 @@ static std::thread torControlThread;
 
 static void TorControlThread(CService onion_service_target)
 {
-    SetSyscallSandboxPolicy(SyscallSandboxPolicy::TOR_CONTROL);
     TorController ctrl(gBase, gArgs.GetArg("-torcontrol", DEFAULT_TOR_CONTROL), onion_service_target);
 
     event_base_dispatch(gBase);

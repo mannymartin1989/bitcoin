@@ -47,16 +47,16 @@ class MempoolCompatibilityTest(BitcoinTestFramework):
         # unbroadcasted_tx won't pass old_node's `MemPoolAccept::PreChecks`.
         self.connect_nodes(0, 1)
         self.sync_blocks()
-        self.stop_node(1)
 
         self.log.info("Add a transaction to mempool on old node and shutdown")
         old_tx_hash = new_wallet.send_self_transfer(from_node=old_node)["txid"]
         assert old_tx_hash in old_node.getrawmempool()
         self.stop_node(0)
+        self.stop_node(1)
 
         self.log.info("Move mempool.dat from old to new node")
-        old_node_mempool = os.path.join(old_node.datadir, self.chain, 'mempool.dat')
-        new_node_mempool = os.path.join(new_node.datadir, self.chain, 'mempool.dat')
+        old_node_mempool = os.path.join(old_node.chain_path, 'mempool.dat')
+        new_node_mempool = os.path.join(new_node.chain_path, 'mempool.dat')
         os.rename(old_node_mempool, new_node_mempool)
 
         self.log.info("Start new node and verify mempool contains the tx")

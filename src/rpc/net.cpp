@@ -21,6 +21,7 @@
 #include <rpc/util.h>
 #include <sync.h>
 #include <timedata.h>
+#include <util/chaintype.h>
 #include <util/strencodings.h>
 #include <util/string.h>
 #include <util/time.h>
@@ -196,7 +197,7 @@ static RPCHelpMan getpeerinfo()
         obj.pushKV("id", stats.nodeid);
         obj.pushKV("addr", stats.m_addr_name);
         if (stats.addrBind.IsValid()) {
-            obj.pushKV("addrbind", stats.addrBind.ToString());
+            obj.pushKV("addrbind", stats.addrBind.ToStringAddrPort());
         }
         if (!(stats.addrLocal.empty())) {
             obj.pushKV("addrlocal", stats.addrLocal);
@@ -354,7 +355,7 @@ static RPCHelpMan addconnection()
         },
         [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
 {
-    if (Params().NetworkIDString() != CBaseChainParams::REGTEST) {
+    if (Params().GetChainType() != ChainType::REGTEST) {
         throw std::runtime_error("addconnection is for regression testing (-regtest mode) only.");
     }
 
@@ -496,7 +497,7 @@ static RPCHelpMan getaddednodeinfo()
         UniValue addresses(UniValue::VARR);
         if (info.fConnected) {
             UniValue address(UniValue::VOBJ);
-            address.pushKV("address", info.resolvedAddress.ToString());
+            address.pushKV("address", info.resolvedAddress.ToStringAddrPort());
             address.pushKV("connected", info.fInbound ? "inbound" : "outbound");
             addresses.push_back(address);
         }
@@ -512,15 +513,15 @@ static RPCHelpMan getaddednodeinfo()
 static RPCHelpMan getnettotals()
 {
     return RPCHelpMan{"getnettotals",
-                "\nReturns information about network traffic, including bytes in, bytes out,\n"
-                "and current time.\n",
-                {},
+        "Returns information about network traffic, including bytes in, bytes out,\n"
+        "and current system time.",
+        {},
                 RPCResult{
                    RPCResult::Type::OBJ, "", "",
                    {
                        {RPCResult::Type::NUM, "totalbytesrecv", "Total bytes received"},
                        {RPCResult::Type::NUM, "totalbytessent", "Total bytes sent"},
-                       {RPCResult::Type::NUM_TIME, "timemillis", "Current " + UNIX_EPOCH_TIME + " in milliseconds"},
+                       {RPCResult::Type::NUM_TIME, "timemillis", "Current system " + UNIX_EPOCH_TIME + " in milliseconds"},
                        {RPCResult::Type::OBJ, "uploadtarget", "",
                        {
                            {RPCResult::Type::NUM, "timeframe", "Length of the measuring timeframe in seconds"},
@@ -544,7 +545,7 @@ static RPCHelpMan getnettotals()
     UniValue obj(UniValue::VOBJ);
     obj.pushKV("totalbytesrecv", connman.GetTotalBytesRecv());
     obj.pushKV("totalbytessent", connman.GetTotalBytesSent());
-    obj.pushKV("timemillis", GetTimeMillis());
+    obj.pushKV("timemillis", TicksSinceEpoch<std::chrono::milliseconds>(SystemClock::now()));
 
     UniValue outboundLimit(UniValue::VOBJ);
     outboundLimit.pushKV("timeframe", count_seconds(connman.GetMaxOutboundTimeframe()));
@@ -571,7 +572,7 @@ static UniValue GetNetworksInfo()
         obj.pushKV("name", GetNetworkName(network));
         obj.pushKV("limited", !IsReachable(network));
         obj.pushKV("reachable", IsReachable(network));
-        obj.pushKV("proxy", proxy.IsValid() ? proxy.proxy.ToStringIPPort() : std::string());
+        obj.pushKV("proxy", proxy.IsValid() ? proxy.proxy.ToStringAddrPort() : std::string());
         obj.pushKV("proxy_randomize_credentials", proxy.randomize_credentials);
         networks.push_back(obj);
     }
@@ -664,7 +665,7 @@ static RPCHelpMan getnetworkinfo()
         for (const std::pair<const CNetAddr, LocalServiceInfo> &item : mapLocalHost)
         {
             UniValue rec(UniValue::VOBJ);
-            rec.pushKV("address", item.first.ToString());
+            rec.pushKV("address", item.first.ToStringAddr());
             rec.pushKV("port", item.second.nPort);
             rec.pushKV("score", item.second.nScore);
             localAddresses.push_back(rec);
@@ -702,9 +703,7 @@ static RPCHelpMan setban()
         throw std::runtime_error(help.ToString());
     }
     NodeContext& node = EnsureAnyNodeContext(request.context);
-    if (!node.banman) {
-        throw JSONRPCError(RPC_DATABASE_ERROR, "Error: Ban database not loaded");
-    }
+    BanMan& banman = EnsureBanman(node);
 
     CSubNet subNet;
     CNetAddr netAddr;
@@ -714,9 +713,10 @@ static RPCHelpMan setban()
         isSubnet = true;
 
     if (!isSubnet) {
-        CNetAddr resolved;
-        LookupHost(request.params[0].get_str(), resolved, false);
-        netAddr = resolved;
+        const std::optional<CNetAddr> addr{LookupHost(request.params[0].get_str(), false)};
+        if (addr.has_value()) {
+            netAddr = addr.value();
+        }
     }
     else
         LookupSubNet(request.params[0].get_str(), subNet);
@@ -726,7 +726,7 @@ static RPCHelpMan setban()
 
     if (strCommand == "add")
     {
-        if (isSubnet ? node.banman->IsBanned(subNet) : node.banman->IsBanned(netAddr)) {
+        if (isSubnet ? banman.IsBanned(subNet) : banman.IsBanned(netAddr)) {
             throw JSONRPCError(RPC_CLIENT_NODE_ALREADY_ADDED, "Error: IP/Subnet already banned");
         }
 
@@ -741,12 +741,12 @@ static RPCHelpMan setban()
         }
 
         if (isSubnet) {
-            node.banman->Ban(subNet, banTime, absolute);
+            banman.Ban(subNet, banTime, absolute);
             if (node.connman) {
                 node.connman->DisconnectNode(subNet);
             }
         } else {
-            node.banman->Ban(netAddr, banTime, absolute);
+            banman.Ban(netAddr, banTime, absolute);
             if (node.connman) {
                 node.connman->DisconnectNode(netAddr);
             }
@@ -754,7 +754,7 @@ static RPCHelpMan setban()
     }
     else if(strCommand == "remove")
     {
-        if (!( isSubnet ? node.banman->Unban(subNet) : node.banman->Unban(netAddr) )) {
+        if (!( isSubnet ? banman.Unban(subNet) : banman.Unban(netAddr) )) {
             throw JSONRPCError(RPC_CLIENT_INVALID_IP_OR_SUBNET, "Error: Unban failed. Requested address/subnet was not previously manually banned.");
         }
     }
@@ -785,13 +785,10 @@ static RPCHelpMan listbanned()
                 },
         [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
 {
-    NodeContext& node = EnsureAnyNodeContext(request.context);
-    if(!node.banman) {
-        throw JSONRPCError(RPC_DATABASE_ERROR, "Error: Ban database not loaded");
-    }
+    BanMan& banman = EnsureAnyBanman(request.context);
 
     banmap_t banMap;
-    node.banman->GetBanned(banMap);
+    banman.GetBanned(banMap);
     const int64_t current_time{GetTime()};
 
     UniValue bannedAddresses(UniValue::VARR);
@@ -825,12 +822,9 @@ static RPCHelpMan clearbanned()
                 },
         [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
 {
-    NodeContext& node = EnsureAnyNodeContext(request.context);
-    if (!node.banman) {
-        throw JSONRPCError(RPC_DATABASE_ERROR, "Error: Ban database not loaded");
-    }
+    BanMan& banman = EnsureAnyBanman(request.context);
 
-    node.banman->ClearBanned();
+    banman.ClearBanned();
 
     return UniValue::VNULL;
 },
@@ -909,7 +903,7 @@ static RPCHelpMan getnodeaddresses()
         UniValue obj(UniValue::VOBJ);
         obj.pushKV("time", int64_t{TicksSinceEpoch<std::chrono::seconds>(addr.nTime)});
         obj.pushKV("services", (uint64_t)addr.nServices);
-        obj.pushKV("address", addr.ToStringIP());
+        obj.pushKV("address", addr.ToStringAddr());
         obj.pushKV("port", addr.GetPort());
         obj.pushKV("network", GetNetworkName(addr.GetNetClass()));
         ret.push_back(obj);
@@ -950,11 +944,11 @@ static RPCHelpMan addpeeraddress()
     const bool tried{request.params[2].isNull() ? false : request.params[2].get_bool()};
 
     UniValue obj(UniValue::VOBJ);
-    CNetAddr net_addr;
+    std::optional<CNetAddr> net_addr{LookupHost(addr_string, false)};
     bool success{false};
 
-    if (LookupHost(addr_string, net_addr, false)) {
-        CService service{net_addr, port};
+    if (net_addr.has_value()) {
+        CService service{net_addr.value(), port};
         CAddress address{MaybeFlipIPv6toCJDNS(service), ServiceFlags{NODE_NETWORK | NODE_WITNESS}};
         address.nTime = Now<NodeSeconds>();
         // The source address is set equal to the address. This is equivalent to the peer

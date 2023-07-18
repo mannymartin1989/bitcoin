@@ -4,6 +4,7 @@
 
 #include <chainparams.h>
 #include <clientversion.h>
+#include <common/args.h>
 #include <compat/compat.h>
 #include <cstdint>
 #include <net.h>
@@ -19,7 +20,6 @@
 #include <timedata.h>
 #include <util/strencodings.h>
 #include <util/string.h>
-#include <util/system.h>
 #include <validation.h>
 #include <version.h>
 
@@ -135,49 +135,49 @@ BOOST_AUTO_TEST_CASE(cnetaddr_basic)
     CNetAddr addr;
 
     // IPv4, INADDR_ANY
-    BOOST_REQUIRE(LookupHost("0.0.0.0", addr, false));
+    addr = LookupHost("0.0.0.0", false).value();
     BOOST_REQUIRE(!addr.IsValid());
     BOOST_REQUIRE(addr.IsIPv4());
 
     BOOST_CHECK(addr.IsBindAny());
     BOOST_CHECK(addr.IsAddrV1Compatible());
-    BOOST_CHECK_EQUAL(addr.ToString(), "0.0.0.0");
+    BOOST_CHECK_EQUAL(addr.ToStringAddr(), "0.0.0.0");
 
     // IPv4, INADDR_NONE
-    BOOST_REQUIRE(LookupHost("255.255.255.255", addr, false));
+    addr = LookupHost("255.255.255.255", false).value();
     BOOST_REQUIRE(!addr.IsValid());
     BOOST_REQUIRE(addr.IsIPv4());
 
     BOOST_CHECK(!addr.IsBindAny());
     BOOST_CHECK(addr.IsAddrV1Compatible());
-    BOOST_CHECK_EQUAL(addr.ToString(), "255.255.255.255");
+    BOOST_CHECK_EQUAL(addr.ToStringAddr(), "255.255.255.255");
 
     // IPv4, casual
-    BOOST_REQUIRE(LookupHost("12.34.56.78", addr, false));
+    addr = LookupHost("12.34.56.78", false).value();
     BOOST_REQUIRE(addr.IsValid());
     BOOST_REQUIRE(addr.IsIPv4());
 
     BOOST_CHECK(!addr.IsBindAny());
     BOOST_CHECK(addr.IsAddrV1Compatible());
-    BOOST_CHECK_EQUAL(addr.ToString(), "12.34.56.78");
+    BOOST_CHECK_EQUAL(addr.ToStringAddr(), "12.34.56.78");
 
     // IPv6, in6addr_any
-    BOOST_REQUIRE(LookupHost("::", addr, false));
+    addr = LookupHost("::", false).value();
     BOOST_REQUIRE(!addr.IsValid());
     BOOST_REQUIRE(addr.IsIPv6());
 
     BOOST_CHECK(addr.IsBindAny());
     BOOST_CHECK(addr.IsAddrV1Compatible());
-    BOOST_CHECK_EQUAL(addr.ToString(), "::");
+    BOOST_CHECK_EQUAL(addr.ToStringAddr(), "::");
 
     // IPv6, casual
-    BOOST_REQUIRE(LookupHost("1122:3344:5566:7788:9900:aabb:ccdd:eeff", addr, false));
+    addr = LookupHost("1122:3344:5566:7788:9900:aabb:ccdd:eeff", false).value();
     BOOST_REQUIRE(addr.IsValid());
     BOOST_REQUIRE(addr.IsIPv6());
 
     BOOST_CHECK(!addr.IsBindAny());
     BOOST_CHECK(addr.IsAddrV1Compatible());
-    BOOST_CHECK_EQUAL(addr.ToString(), "1122:3344:5566:7788:9900:aabb:ccdd:eeff");
+    BOOST_CHECK_EQUAL(addr.ToStringAddr(), "1122:3344:5566:7788:9900:aabb:ccdd:eeff");
 
     // IPv6, scoped/link-local. See https://tools.ietf.org/html/rfc4007
     // We support non-negative decimal integers (uint32_t) as zone id indices.
@@ -186,18 +186,18 @@ BOOST_AUTO_TEST_CASE(cnetaddr_basic)
     // id of "32", return the address as "fe80::1%32".
     const std::string link_local{"fe80::1"};
     const std::string scoped_addr{link_local + "%32"};
-    BOOST_REQUIRE(LookupHost(scoped_addr, addr, false));
+    addr = LookupHost(scoped_addr, false).value();
     BOOST_REQUIRE(addr.IsValid());
     BOOST_REQUIRE(addr.IsIPv6());
     BOOST_CHECK(!addr.IsBindAny());
-    BOOST_CHECK_EQUAL(addr.ToString(), scoped_addr);
+    BOOST_CHECK_EQUAL(addr.ToStringAddr(), scoped_addr);
 
     // Test that the delimiter "%" and default zone id of 0 can be omitted for the default scope.
-    BOOST_REQUIRE(LookupHost(link_local + "%0", addr, false));
+    addr = LookupHost(link_local + "%0", false).value();
     BOOST_REQUIRE(addr.IsValid());
     BOOST_REQUIRE(addr.IsIPv6());
     BOOST_CHECK(!addr.IsBindAny());
-    BOOST_CHECK_EQUAL(addr.ToString(), link_local);
+    BOOST_CHECK_EQUAL(addr.ToStringAddr(), link_local);
 
     // TORv2, no longer supported
     BOOST_CHECK(!addr.SetSpecial("6hzph5hv6337r6p2.onion"));
@@ -211,7 +211,7 @@ BOOST_AUTO_TEST_CASE(cnetaddr_basic)
     BOOST_CHECK(!addr.IsI2P());
     BOOST_CHECK(!addr.IsBindAny());
     BOOST_CHECK(!addr.IsAddrV1Compatible());
-    BOOST_CHECK_EQUAL(addr.ToString(), torv3_addr);
+    BOOST_CHECK_EQUAL(addr.ToStringAddr(), torv3_addr);
 
     // TORv3, broken, with wrong checksum
     BOOST_CHECK(!addr.SetSpecial("pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscsad.onion"));
@@ -238,7 +238,7 @@ BOOST_AUTO_TEST_CASE(cnetaddr_basic)
     BOOST_CHECK(!addr.IsTor());
     BOOST_CHECK(!addr.IsBindAny());
     BOOST_CHECK(!addr.IsAddrV1Compatible());
-    BOOST_CHECK_EQUAL(addr.ToString(), ToLower(i2p_addr));
+    BOOST_CHECK_EQUAL(addr.ToStringAddr(), ToLower(i2p_addr));
 
     // I2P, correct length, but decodes to less than the expected number of bytes.
     BOOST_CHECK(!addr.SetSpecial("udhdrtrcetjm5sxzskjyr5ztpeszydbh4dpl3pl4utgqqw2v4jn=.b32.i2p"));
@@ -265,7 +265,7 @@ BOOST_AUTO_TEST_CASE(cnetaddr_basic)
 
     BOOST_CHECK(!addr.IsBindAny());
     BOOST_CHECK(addr.IsAddrV1Compatible());
-    BOOST_CHECK_EQUAL(addr.ToString(), "esffpvrt3wpeaygy.internal");
+    BOOST_CHECK_EQUAL(addr.ToStringAddr(), "esffpvrt3wpeaygy.internal");
 
     // Totally bogus
     BOOST_CHECK(!addr.SetSpecial("totally bogus"));
@@ -318,10 +318,9 @@ BOOST_AUTO_TEST_CASE(cnetaddr_tostring_canonical_ipv6)
         {"2001:db8:aaaa:bbbb:cccc:dddd:eeee:AaAa", "2001:db8:aaaa:bbbb:cccc:dddd:eeee:aaaa"},
     };
     for (const auto& [input_address, expected_canonical_representation_output] : canonical_representations_ipv6) {
-        CNetAddr net_addr;
-        BOOST_REQUIRE(LookupHost(input_address, net_addr, false));
-        BOOST_REQUIRE(net_addr.IsIPv6());
-        BOOST_CHECK_EQUAL(net_addr.ToString(), expected_canonical_representation_output);
+        const std::optional<CNetAddr> net_addr{LookupHost(input_address, false)};
+        BOOST_REQUIRE(net_addr.value().IsIPv6());
+        BOOST_CHECK_EQUAL(net_addr.value().ToStringAddr(), expected_canonical_representation_output);
     }
 }
 
@@ -334,12 +333,12 @@ BOOST_AUTO_TEST_CASE(cnetaddr_serialize_v1)
     BOOST_CHECK_EQUAL(HexStr(s), "00000000000000000000000000000000");
     s.clear();
 
-    BOOST_REQUIRE(LookupHost("1.2.3.4", addr, false));
+    addr = LookupHost("1.2.3.4", false).value();
     s << addr;
     BOOST_CHECK_EQUAL(HexStr(s), "00000000000000000000ffff01020304");
     s.clear();
 
-    BOOST_REQUIRE(LookupHost("1a1b:2a2b:3a3b:4a4b:5a5b:6a6b:7a7b:8a8b", addr, false));
+    addr = LookupHost("1a1b:2a2b:3a3b:4a4b:5a5b:6a6b:7a7b:8a8b", false).value();
     s << addr;
     BOOST_CHECK_EQUAL(HexStr(s), "1a1b2a2b3a3b4a4b5a5b6a6b7a7b8a8b");
     s.clear();
@@ -370,12 +369,12 @@ BOOST_AUTO_TEST_CASE(cnetaddr_serialize_v2)
     BOOST_CHECK_EQUAL(HexStr(s), "021000000000000000000000000000000000");
     s.clear();
 
-    BOOST_REQUIRE(LookupHost("1.2.3.4", addr, false));
+    addr = LookupHost("1.2.3.4", false).value();
     s << addr;
     BOOST_CHECK_EQUAL(HexStr(s), "010401020304");
     s.clear();
 
-    BOOST_REQUIRE(LookupHost("1a1b:2a2b:3a3b:4a4b:5a5b:6a6b:7a7b:8a8b", addr, false));
+    addr = LookupHost("1a1b:2a2b:3a3b:4a4b:5a5b:6a6b:7a7b:8a8b", false).value();
     s << addr;
     BOOST_CHECK_EQUAL(HexStr(s), "02101a1b2a2b3a3b4a4b5a5b6a6b7a7b8a8b");
     s.clear();
@@ -410,7 +409,7 @@ BOOST_AUTO_TEST_CASE(cnetaddr_unserialize_v2)
     BOOST_CHECK(addr.IsValid());
     BOOST_CHECK(addr.IsIPv4());
     BOOST_CHECK(addr.IsAddrV1Compatible());
-    BOOST_CHECK_EQUAL(addr.ToString(), "1.2.3.4");
+    BOOST_CHECK_EQUAL(addr.ToStringAddr(), "1.2.3.4");
     BOOST_REQUIRE(s.empty());
 
     // Invalid IPv4, valid length but address itself is shorter.
@@ -447,7 +446,7 @@ BOOST_AUTO_TEST_CASE(cnetaddr_unserialize_v2)
     BOOST_CHECK(addr.IsValid());
     BOOST_CHECK(addr.IsIPv6());
     BOOST_CHECK(addr.IsAddrV1Compatible());
-    BOOST_CHECK_EQUAL(addr.ToString(), "102:304:506:708:90a:b0c:d0e:f10");
+    BOOST_CHECK_EQUAL(addr.ToStringAddr(), "102:304:506:708:90a:b0c:d0e:f10");
     BOOST_REQUIRE(s.empty());
 
     // Valid IPv6, contains embedded "internal".
@@ -459,7 +458,7 @@ BOOST_AUTO_TEST_CASE(cnetaddr_unserialize_v2)
     s >> addr;
     BOOST_CHECK(addr.IsInternal());
     BOOST_CHECK(addr.IsAddrV1Compatible());
-    BOOST_CHECK_EQUAL(addr.ToString(), "zklycewkdo64v6wc.internal");
+    BOOST_CHECK_EQUAL(addr.ToStringAddr(), "zklycewkdo64v6wc.internal");
     BOOST_REQUIRE(s.empty());
 
     // Invalid IPv6, with bogus length.
@@ -505,7 +504,7 @@ BOOST_AUTO_TEST_CASE(cnetaddr_unserialize_v2)
     BOOST_CHECK(addr.IsValid());
     BOOST_CHECK(addr.IsTor());
     BOOST_CHECK(!addr.IsAddrV1Compatible());
-    BOOST_CHECK_EQUAL(addr.ToString(),
+    BOOST_CHECK_EQUAL(addr.ToStringAddr(),
                       "pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion");
     BOOST_REQUIRE(s.empty());
 
@@ -528,7 +527,7 @@ BOOST_AUTO_TEST_CASE(cnetaddr_unserialize_v2)
     BOOST_CHECK(addr.IsValid());
     BOOST_CHECK(addr.IsI2P());
     BOOST_CHECK(!addr.IsAddrV1Compatible());
-    BOOST_CHECK_EQUAL(addr.ToString(),
+    BOOST_CHECK_EQUAL(addr.ToStringAddr(),
                       "ukeu3k5oycgaauneqgtnvselmt4yemvoilkln7jpvamvfx7dnkdq.b32.i2p");
     BOOST_REQUIRE(s.empty());
 
@@ -551,7 +550,7 @@ BOOST_AUTO_TEST_CASE(cnetaddr_unserialize_v2)
     BOOST_CHECK(addr.IsValid());
     BOOST_CHECK(addr.IsCJDNS());
     BOOST_CHECK(!addr.IsAddrV1Compatible());
-    BOOST_CHECK_EQUAL(addr.ToString(), "fc00:1:2:3:4:5:6:7");
+    BOOST_CHECK_EQUAL(addr.ToStringAddr(), "fc00:1:2:3:4:5:6:7");
     BOOST_REQUIRE(s.empty());
 
     // Invalid CJDNS, wrong prefix.
@@ -903,6 +902,111 @@ BOOST_AUTO_TEST_CASE(initial_advertise_from_version_message)
     // in timedata.cpp and later confuses the test "timedata_tests/addtimedata". Thus reset
     // that state as it was before our test was run.
     TestOnlyResetTimeData();
+}
+
+
+BOOST_AUTO_TEST_CASE(advertise_local_address)
+{
+    auto CreatePeer = [](const CAddress& addr) {
+        return std::make_unique<CNode>(/*id=*/0,
+                                       /*sock=*/nullptr,
+                                       addr,
+                                       /*nKeyedNetGroupIn=*/0,
+                                       /*nLocalHostNonceIn=*/0,
+                                       CAddress{},
+                                       /*pszDest=*/std::string{},
+                                       ConnectionType::OUTBOUND_FULL_RELAY,
+                                       /*inbound_onion=*/false);
+    };
+    SetReachable(NET_CJDNS, true);
+
+    CAddress addr_ipv4{Lookup("1.2.3.4", 8333, false).value(), NODE_NONE};
+    BOOST_REQUIRE(addr_ipv4.IsValid());
+    BOOST_REQUIRE(addr_ipv4.IsIPv4());
+
+    CAddress addr_ipv6{Lookup("1122:3344:5566:7788:9900:aabb:ccdd:eeff", 8333, false).value(), NODE_NONE};
+    BOOST_REQUIRE(addr_ipv6.IsValid());
+    BOOST_REQUIRE(addr_ipv6.IsIPv6());
+
+    CAddress addr_ipv6_tunnel{Lookup("2002:3344:5566:7788:9900:aabb:ccdd:eeff", 8333, false).value(), NODE_NONE};
+    BOOST_REQUIRE(addr_ipv6_tunnel.IsValid());
+    BOOST_REQUIRE(addr_ipv6_tunnel.IsIPv6());
+    BOOST_REQUIRE(addr_ipv6_tunnel.IsRFC3964());
+
+    CAddress addr_teredo{Lookup("2001:0000:5566:7788:9900:aabb:ccdd:eeff", 8333, false).value(), NODE_NONE};
+    BOOST_REQUIRE(addr_teredo.IsValid());
+    BOOST_REQUIRE(addr_teredo.IsIPv6());
+    BOOST_REQUIRE(addr_teredo.IsRFC4380());
+
+    CAddress addr_onion;
+    BOOST_REQUIRE(addr_onion.SetSpecial("pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion"));
+    BOOST_REQUIRE(addr_onion.IsValid());
+    BOOST_REQUIRE(addr_onion.IsTor());
+
+    CAddress addr_i2p;
+    BOOST_REQUIRE(addr_i2p.SetSpecial("udhdrtrcetjm5sxzskjyr5ztpeszydbh4dpl3pl4utgqqw2v4jna.b32.i2p"));
+    BOOST_REQUIRE(addr_i2p.IsValid());
+    BOOST_REQUIRE(addr_i2p.IsI2P());
+
+    CService service_cjdns{Lookup("fc00:3344:5566:7788:9900:aabb:ccdd:eeff", 8333, false).value(), NODE_NONE};
+    CAddress addr_cjdns{MaybeFlipIPv6toCJDNS(service_cjdns), NODE_NONE};
+    BOOST_REQUIRE(addr_cjdns.IsValid());
+    BOOST_REQUIRE(addr_cjdns.IsCJDNS());
+
+    const auto peer_ipv4{CreatePeer(addr_ipv4)};
+    const auto peer_ipv6{CreatePeer(addr_ipv6)};
+    const auto peer_ipv6_tunnel{CreatePeer(addr_ipv6_tunnel)};
+    const auto peer_teredo{CreatePeer(addr_teredo)};
+    const auto peer_onion{CreatePeer(addr_onion)};
+    const auto peer_i2p{CreatePeer(addr_i2p)};
+    const auto peer_cjdns{CreatePeer(addr_cjdns)};
+
+    // one local clearnet address - advertise to all but privacy peers
+    AddLocal(addr_ipv4);
+    BOOST_CHECK(GetLocalAddress(*peer_ipv4) == addr_ipv4);
+    BOOST_CHECK(GetLocalAddress(*peer_ipv6) == addr_ipv4);
+    BOOST_CHECK(GetLocalAddress(*peer_ipv6_tunnel) == addr_ipv4);
+    BOOST_CHECK(GetLocalAddress(*peer_teredo) == addr_ipv4);
+    BOOST_CHECK(GetLocalAddress(*peer_cjdns) == addr_ipv4);
+    BOOST_CHECK(!GetLocalAddress(*peer_onion).IsValid());
+    BOOST_CHECK(!GetLocalAddress(*peer_i2p).IsValid());
+    RemoveLocal(addr_ipv4);
+
+    // local privacy addresses - don't advertise to clearnet peers
+    AddLocal(addr_onion);
+    AddLocal(addr_i2p);
+    BOOST_CHECK(!GetLocalAddress(*peer_ipv4).IsValid());
+    BOOST_CHECK(!GetLocalAddress(*peer_ipv6).IsValid());
+    BOOST_CHECK(!GetLocalAddress(*peer_ipv6_tunnel).IsValid());
+    BOOST_CHECK(!GetLocalAddress(*peer_teredo).IsValid());
+    BOOST_CHECK(!GetLocalAddress(*peer_cjdns).IsValid());
+    BOOST_CHECK(GetLocalAddress(*peer_onion) == addr_onion);
+    BOOST_CHECK(GetLocalAddress(*peer_i2p) == addr_i2p);
+    RemoveLocal(addr_onion);
+    RemoveLocal(addr_i2p);
+
+    // local addresses from all networks
+    AddLocal(addr_ipv4);
+    AddLocal(addr_ipv6);
+    AddLocal(addr_ipv6_tunnel);
+    AddLocal(addr_teredo);
+    AddLocal(addr_onion);
+    AddLocal(addr_i2p);
+    AddLocal(addr_cjdns);
+    BOOST_CHECK(GetLocalAddress(*peer_ipv4) == addr_ipv4);
+    BOOST_CHECK(GetLocalAddress(*peer_ipv6) == addr_ipv6);
+    BOOST_CHECK(GetLocalAddress(*peer_ipv6_tunnel) == addr_ipv6);
+    BOOST_CHECK(GetLocalAddress(*peer_teredo) == addr_ipv4);
+    BOOST_CHECK(GetLocalAddress(*peer_onion) == addr_onion);
+    BOOST_CHECK(GetLocalAddress(*peer_i2p) == addr_i2p);
+    BOOST_CHECK(GetLocalAddress(*peer_cjdns) == addr_cjdns);
+    RemoveLocal(addr_ipv4);
+    RemoveLocal(addr_ipv6);
+    RemoveLocal(addr_ipv6_tunnel);
+    RemoveLocal(addr_teredo);
+    RemoveLocal(addr_onion);
+    RemoveLocal(addr_i2p);
+    RemoveLocal(addr_cjdns);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -6,14 +6,15 @@
 #include <pubkey.h>
 #include <script/descriptor.h>
 #include <test/fuzz/fuzz.h>
+#include <util/chaintype.h>
 
 void initialize_descriptor_parse()
 {
     ECC_Start();
-    SelectParams(CBaseChainParams::MAIN);
+    SelectParams(ChainType::MAIN);
 }
 
-FUZZ_TARGET_INIT(descriptor_parse, initialize_descriptor_parse)
+FUZZ_TARGET(descriptor_parse, .init = initialize_descriptor_parse)
 {
     const std::string descriptor(buffer.begin(), buffer.end());
     FlatSigningProvider signing_provider;

@@ -20,9 +20,7 @@ class AnchorsTest(BitcoinTestFramework):
         self.disable_autoconnect = False
 
     def run_test(self):
-        node_anchors_path = os.path.join(
-            self.nodes[0].datadir, "regtest", "anchors.dat"
-        )
+        node_anchors_path = self.nodes[0].chain_path / "anchors.dat"
 
         self.log.info("When node starts, check if anchors.dat doesn't exist")
         assert not os.path.exists(node_anchors_path)
@@ -63,17 +61,25 @@ class AnchorsTest(BitcoinTestFramework):
         self.log.info("Check the addresses in anchors.dat")
 
         with open(node_anchors_path, "rb") as file_handler:
-            anchors = file_handler.read().hex()
+            anchors = file_handler.read()
 
+        anchors_hex = anchors.hex()
         for port in block_relay_nodes_port:
             ip_port = ip + port
-            assert ip_port in anchors
+            assert ip_port in anchors_hex
         for port in inbound_nodes_port:
             ip_port = ip + port
-            assert ip_port not in anchors
+            assert ip_port not in anchors_hex
 
-        self.log.info("Start node")
-        self.start_node(0)
+        self.log.info("Perturb anchors.dat to test it doesn't throw an error during initialization")
+        with self.nodes[0].assert_debug_log(["0 block-relay-only anchors will be tried for connections."]):
+            with open(node_anchors_path, "wb") as out_file_handler:
+                tweaked_contents = bytearray(anchors)
+                tweaked_contents[20:20] = b'1'
+                out_file_handler.write(bytes(tweaked_contents))
+
+            self.log.info("Start node")
+            self.start_node(0)
 
         self.log.info("When node starts, check if anchors.dat doesn't exist anymore")
         assert not os.path.exists(node_anchors_path)

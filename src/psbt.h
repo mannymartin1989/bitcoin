@@ -1164,7 +1164,7 @@ struct PartiallySignedTransaction
 
         // Make sure that we got an unsigned tx
         if (!tx) {
-            throw std::ios_base::failure("No unsigned transcation was provided");
+            throw std::ios_base::failure("No unsigned transaction was provided");
         }
 
         // Read input data
@@ -1230,6 +1230,9 @@ bool PSBTInputSignedAndVerified(const PartiallySignedTransaction psbt, unsigned 
  * multiple SignPSBTInput calls). If it is nullptr, a dummy signature will be created.
  **/
 bool SignPSBTInput(const SigningProvider& provider, PartiallySignedTransaction& psbt, int index, const PrecomputedTransactionData* txdata, int sighash = SIGHASH_ALL, SignatureData* out_sigdata = nullptr, bool finalize = true);
+
+/**  Reduces the size of the PSBT by dropping unnecessary `non_witness_utxos` (i.e. complete previous transactions) from a psbt when all inputs are segwit v1. */
+void RemoveUnnecessaryTransactions(PartiallySignedTransaction& psbtx, const int& sighash_type);
 
 /** Counts the unsigned inputs of a PSBT. */
 size_t CountPSBTUnsignedInputs(const PartiallySignedTransaction& psbt);

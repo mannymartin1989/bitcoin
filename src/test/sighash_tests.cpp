@@ -2,6 +2,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <common/system.h>
 #include <consensus/tx_check.h>
 #include <consensus/validation.h>
 #include <hash.h>
@@ -11,9 +12,9 @@
 #include <streams.h>
 #include <test/data/sighash.json.h>
 #include <test/util/json.h>
+#include <test/util/random.h>
 #include <test/util/setup_common.h>
 #include <util/strencodings.h>
-#include <util/system.h>
 #include <version.h>
 
 #include <iostream>
@@ -109,7 +110,7 @@ void static RandomTransaction(CMutableTransaction& tx, bool fSingle)
     for (int out = 0; out < outs; out++) {
         tx.vout.push_back(CTxOut());
         CTxOut &txout = tx.vout.back();
-        txout.nValue = InsecureRandRange(100000000);
+        txout.nValue = InsecureRandMoneyAmount();
         RandomScript(txout.scriptPubKey);
     }
 }

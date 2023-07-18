@@ -6,11 +6,11 @@
 #include <txdb.h>
 
 #include <chain.h>
+#include <logging.h>
 #include <pow.h>
 #include <random.h>
-#include <shutdown.h>
 #include <uint256.h>
-#include <util/system.h>
+#include <util/signalinterrupt.h>
 #include <util/translation.h>
 #include <util/vector.h>
 
@@ -31,22 +31,22 @@ static constexpr uint8_t DB_COINS{'c'};
 static constexpr uint8_t DB_TXINDEX_BLOCK{'T'};
 //               uint8_t DB_TXINDEX{'t'}
 
-std::optional<bilingual_str> CheckLegacyTxindex(CBlockTreeDB& block_tree_db)
+util::Result<void> CheckLegacyTxindex(CBlockTreeDB& block_tree_db)
 {
     CBlockLocator ignored{};
     if (block_tree_db.Read(DB_TXINDEX_BLOCK, ignored)) {
-        return _("The -txindex upgrade started by a previous version cannot be completed. Restart with the previous version or run a full -reindex.");
+        return util::Error{_("The -txindex upgrade started by a previous version cannot be completed. Restart with the previous version or run a full -reindex.")};
     }
     bool txindex_legacy_flag{false};
     block_tree_db.ReadFlag("txindex", txindex_legacy_flag);
     if (txindex_legacy_flag) {
         // Disable legacy txindex and warn once about occupied disk space
         if (!block_tree_db.WriteFlag("txindex", false)) {
-            return Untranslated("Failed to write block index db flag 'txindex'='0'");
+            return util::Error{Untranslated("Failed to write block index db flag 'txindex'='0'")};
         }
-        return _("The block index db contains a legacy 'txindex'. To clear the occupied disk space, run a full -reindex, otherwise ignore this error. This error message will not be displayed again.");
+        return util::Error{_("The block index db contains a legacy 'txindex'. To clear the occupied disk space, run a full -reindex, otherwise ignore this error. This error message will not be displayed again.")};
     }
-    return std::nullopt;
+    return {};
 }
 
 bool CCoinsViewDB::NeedsUpgrade()
@@ -70,21 +70,22 @@ struct CoinEntry {
 
 } // namespace
 
-CCoinsViewDB::CCoinsViewDB(fs::path ldb_path, size_t nCacheSize, bool fMemory, bool fWipe) :
-    m_db(std::make_unique<CDBWrapper>(ldb_path, nCacheSize, fMemory, fWipe, true)),
-    m_ldb_path(ldb_path),
-    m_is_memory(fMemory) { }
+CCoinsViewDB::CCoinsViewDB(DBParams db_params, CoinsViewOptions options) :
+    m_db_params{std::move(db_params)},
+    m_options{std::move(options)},
+    m_db{std::make_unique<CDBWrapper>(m_db_params)} { }
 
 void CCoinsViewDB::ResizeCache(size_t new_cache_size)
 {
     // We can't do this operation with an in-memory DB since we'll lose all the coins upon
     // reset.
-    if (!m_is_memory) {
+    if (!m_db_params.memory_only) {
         // Have to do a reset first to get the original `m_db` state to release its
         // filesystem lock.
         m_db.reset();
-        m_db = std::make_unique<CDBWrapper>(
-            m_ldb_path, new_cache_size, m_is_memory, /*fWipe=*/false, /*obfuscate=*/true);
+        m_db_params.cache_bytes = new_cache_size;
+        m_db_params.wipe_data = false;
+        m_db = std::make_unique<CDBWrapper>(m_db_params);
     }
 }
 
@@ -115,8 +116,6 @@ bool CCoinsViewDB::BatchWrite(CCoinsMap &mapCoins, const uint256 &hashBlock, boo
     CDBBatch batch(*m_db);
     size_t count = 0;
     size_t changed = 0;
-    size_t batch_size = (size_t)gArgs.GetIntArg("-dbbatchsize", nDefaultDbBatchSize);
-    int crash_simulate = gArgs.GetIntArg("-dbcrashratio", 0);
     assert(!hashBlock.IsNull());
 
     uint256 old_tip = GetBestBlock();
@@ -147,13 +146,13 @@ bool CCoinsViewDB::BatchWrite(CCoinsMap &mapCoins, const uint256 &hashBlock, boo
         }
         count++;
         it = erase ? mapCoins.erase(it) : std::next(it);
-        if (batch.SizeEstimate() > batch_size) {
+        if (batch.SizeEstimate() > m_options.batch_write_bytes) {
             LogPrint(BCLog::COINDB, "Writing partial batch of %.2f MiB\n", batch.SizeEstimate() * (1.0 / 1048576.0));
             m_db->WriteBatch(batch);
             batch.Clear();
-            if (crash_simulate) {
+            if (m_options.simulate_crash_ratio) {
                 static FastRandomContext rng;
-                if (rng.randrange(crash_simulate) == 0) {
+                if (rng.randrange(m_options.simulate_crash_ratio) == 0) {
                     LogPrintf("Simulating a crash. Goodbye.\n");
                     _Exit(0);
                 }
@@ -174,9 +173,6 @@ bool CCoinsViewDB::BatchWrite(CCoinsMap &mapCoins, const uint256 &hashBlock, boo
 size_t CCoinsViewDB::EstimateSize() const
 {
     return m_db->EstimateSize(DB_COIN, uint8_t(DB_COIN + 1));
-}
-
-CBlockTreeDB::CBlockTreeDB(size_t nCacheSize, bool fMemory, bool fWipe) : CDBWrapper(gArgs.GetDataDirNet() / "blocks" / "index", nCacheSize, fMemory, fWipe) {
 }
 
 bool CBlockTreeDB::ReadBlockFileInfo(int nFile, CBlockFileInfo &info) {
@@ -295,7 +291,7 @@ bool CBlockTreeDB::ReadFlag(const std::string &name, bool &fValue) {
     return true;
 }
 
-bool CBlockTreeDB::LoadBlockIndexGuts(const Consensus::Params& consensusParams, std::function<CBlockIndex*(const uint256&)> insertBlockIndex)
+bool CBlockTreeDB::LoadBlockIndexGuts(const Consensus::Params& consensusParams, std::function<CBlockIndex*(const uint256&)> insertBlockIndex, const util::SignalInterrupt& interrupt)
 {
     AssertLockHeld(::cs_main);
     std::unique_ptr<CDBIterator> pcursor(NewIterator());
@@ -303,7 +299,7 @@ bool CBlockTreeDB::LoadBlockIndexGuts(const Consensus::Params& consensusParams, 
 
     // Load m_block_index
     while (pcursor->Valid()) {
-        if (ShutdownRequested()) return false;
+        if (interrupt) return false;
         std::pair<uint8_t, uint256> key;
         if (pcursor->GetKey(key) && key.first == DB_BLOCK_INDEX) {
             CDiskBlockIndex diskindex;

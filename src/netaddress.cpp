@@ -599,7 +599,7 @@ std::string OnionToString(Span<const uint8_t> addr)
     return EncodeBase32(address) + ".onion";
 }
 
-std::string CNetAddr::ToStringIP() const
+std::string CNetAddr::ToStringAddr() const
 {
     switch (m_net) {
     case NET_IPV4:
@@ -620,11 +620,6 @@ std::string CNetAddr::ToStringIP() const
     } // no default case, so the compiler can warn about missing cases
 
     assert(false);
-}
-
-std::string CNetAddr::ToString() const
-{
-    return ToStringIP();
 }
 
 bool operator==(const CNetAddr& a, const CNetAddr& b)
@@ -728,19 +723,16 @@ std::vector<unsigned char> CNetAddr::GetAddrBytes() const
 
 // private extensions to enum Network, only returned by GetExtNetwork,
 // and only used in GetReachabilityFrom
-static const int NET_UNKNOWN = NET_MAX + 0;
-static const int NET_TEREDO  = NET_MAX + 1;
-int static GetExtNetwork(const CNetAddr *addr)
+static const int NET_TEREDO = NET_MAX;
+int static GetExtNetwork(const CNetAddr& addr)
 {
-    if (addr == nullptr)
-        return NET_UNKNOWN;
-    if (addr->IsRFC4380())
+    if (addr.IsRFC4380())
         return NET_TEREDO;
-    return addr->GetNetwork();
+    return addr.GetNetwork();
 }
 
 /** Calculates a metric for how reachable (*this) is from a given partner */
-int CNetAddr::GetReachabilityFrom(const CNetAddr *paddrPartner) const
+int CNetAddr::GetReachabilityFrom(const CNetAddr& paddrPartner) const
 {
     enum Reachability {
         REACH_UNREACHABLE,
@@ -755,7 +747,7 @@ int CNetAddr::GetReachabilityFrom(const CNetAddr *paddrPartner) const
     if (!IsRoutable() || IsInternal())
         return REACH_UNREACHABLE;
 
-    int ourNet = GetExtNetwork(this);
+    int ourNet = GetExtNetwork(*this);
     int theirNet = GetExtNetwork(paddrPartner);
     bool fTunnel = IsRFC3964() || IsRFC6052() || IsRFC6145();
 
@@ -795,7 +787,6 @@ int CNetAddr::GetReachabilityFrom(const CNetAddr *paddrPartner) const
         case NET_IPV6:    return REACH_IPV6_WEAK;
         case NET_IPV4:    return REACH_IPV4;
         }
-    case NET_UNKNOWN:
     case NET_UNROUTABLE:
     default:
         switch(ourNet) {
@@ -916,23 +907,15 @@ std::vector<unsigned char> CService::GetKey() const
     return key;
 }
 
-std::string CService::ToStringPort() const
+std::string CService::ToStringAddrPort() const
 {
-    return strprintf("%u", port);
-}
+    const auto port_str = strprintf("%u", port);
 
-std::string CService::ToStringIPPort() const
-{
     if (IsIPv4() || IsTor() || IsI2P() || IsInternal()) {
-        return ToStringIP() + ":" + ToStringPort();
+        return ToStringAddr() + ":" + port_str;
     } else {
-        return "[" + ToStringIP() + "]:" + ToStringPort();
+        return "[" + ToStringAddr() + "]:" + port_str;
     }
-}
-
-std::string CService::ToString() const
-{
-    return ToStringIPPort();
 }
 
 CSubNet::CSubNet():
@@ -1098,35 +1081,12 @@ std::string CSubNet::ToString() const
         break;
     }
 
-    return network.ToString() + suffix;
+    return network.ToStringAddr() + suffix;
 }
 
 bool CSubNet::IsValid() const
 {
     return valid;
-}
-
-bool CSubNet::SanityCheck() const
-{
-    switch (network.m_net) {
-    case NET_IPV4:
-    case NET_IPV6:
-        break;
-    case NET_ONION:
-    case NET_I2P:
-    case NET_CJDNS:
-        return true;
-    case NET_INTERNAL:
-    case NET_UNROUTABLE:
-    case NET_MAX:
-        return false;
-    }
-
-    for (size_t x = 0; x < network.m_addr.size(); ++x) {
-        if (network.m_addr[x] & ~netmask[x]) return false;
-    }
-
-    return true;
 }
 
 bool operator==(const CSubNet& a, const CSubNet& b)

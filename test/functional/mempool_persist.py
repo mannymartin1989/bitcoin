@@ -143,8 +143,8 @@ class MempoolPersistTest(BitcoinTestFramework):
             self.nodes[2].syncwithvalidationinterfacequeue()  # Flush mempool to wallet
             assert_equal(node2_balance, wallet_watch.getbalance())
 
-        mempooldat0 = os.path.join(self.nodes[0].datadir, self.chain, 'mempool.dat')
-        mempooldat1 = os.path.join(self.nodes[1].datadir, self.chain, 'mempool.dat')
+        mempooldat0 = os.path.join(self.nodes[0].chain_path, 'mempool.dat')
+        mempooldat1 = os.path.join(self.nodes[1].chain_path, 'mempool.dat')
 
         self.log.debug("Force -persistmempool=0 node1 to savemempool to disk via RPC")
         assert not os.path.exists(mempooldat1)
@@ -191,6 +191,7 @@ class MempoolPersistTest(BitcoinTestFramework):
     def test_persist_unbroadcast(self):
         node0 = self.nodes[0]
         self.start_node(0)
+        self.start_node(2)
 
         # clear out mempool
         self.generate(node0, 1, sync_fun=self.no_op)

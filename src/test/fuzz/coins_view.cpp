@@ -3,7 +3,6 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <chainparams.h>
-#include <chainparamsbase.h>
 #include <coins.h>
 #include <consensus/amount.h>
 #include <consensus/tx_check.h>
@@ -42,11 +41,11 @@ void initialize_coins_view()
     g_setup = testing_setup.get();
 }
 
-FUZZ_TARGET_INIT(coins_view, initialize_coins_view)
+FUZZ_TARGET(coins_view, .init = initialize_coins_view)
 {
     FuzzedDataProvider fuzzed_data_provider{buffer.data(), buffer.size()};
     CCoinsView backend_coins_view;
-    CCoinsViewCache coins_view_cache{&backend_coins_view};
+    CCoinsViewCache coins_view_cache{&backend_coins_view, /*deterministic=*/true};
     COutPoint random_out_point;
     Coin random_coin;
     CMutableTransaction random_mutable_transaction;
@@ -115,7 +114,8 @@ FUZZ_TARGET_INIT(coins_view, initialize_coins_view)
                 random_mutable_transaction = *opt_mutable_transaction;
             },
             [&] {
-                CCoinsMap coins_map;
+                CCoinsMapMemoryResource resource;
+                CCoinsMap coins_map{0, SaltedOutpointHasher{/*deterministic=*/true}, CCoinsMap::key_equal{}, &resource};
                 LIMITED_WHILE(fuzzed_data_provider.ConsumeBool(), 10000) {
                     CCoinsCacheEntry coins_cache_entry;
                     coins_cache_entry.flags = fuzzed_data_provider.ConsumeIntegral<unsigned char>();

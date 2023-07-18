@@ -133,7 +133,9 @@ BITCOIN_CORE_H = \
   checkqueue.h \
   clientversion.h \
   coins.h \
+  common/args.h \
   common/bloom.h \
+  common/init.h \
   common/run_command.h \
   common/url.h \
   compat/assumptions.h \
@@ -141,6 +143,8 @@ BITCOIN_CORE_H = \
   compat/compat.h \
   compat/cpuid.h \
   compat/endian.h \
+  common/settings.h \
+  common/system.h \
   compressor.h \
   consensus/consensus.h \
   consensus/tx_check.h \
@@ -153,7 +157,6 @@ BITCOIN_CORE_H = \
   deploymentstatus.h \
   external_signer.h \
   flatfile.h \
-  fs.h \
   headerssync.h \
   httprpc.h \
   httpserver.h \
@@ -173,7 +176,9 @@ BITCOIN_CORE_H = \
   interfaces/ipc.h \
   interfaces/node.h \
   interfaces/wallet.h \
+  kernel/blockmanager_opts.h \
   kernel/chain.h \
+  kernel/chainparams.h \
   kernel/chainstatemanager_opts.h \
   kernel/checks.h \
   kernel/coinstats.h \
@@ -183,6 +188,7 @@ BITCOIN_CORE_H = \
   kernel/mempool_limits.h \
   kernel/mempool_options.h \
   kernel/mempool_persist.h \
+  kernel/notifications_interface.h \
   kernel/validation_cache_sizes.h \
   key.h \
   key_io.h \
@@ -199,18 +205,24 @@ BITCOIN_CORE_H = \
   netbase.h \
   netgroup.h \
   netmessagemaker.h \
+  node/abort.h \
+  node/blockmanager_args.h \
   node/blockstorage.h \
   node/caches.h \
   node/chainstate.h \
   node/chainstatemanager_args.h \
   node/coin.h \
+  node/coins_view_args.h \
   node/connection_types.h \
   node/context.h \
+  node/database_args.h \
   node/eviction.h \
   node/interface_ui.h \
+  node/kernel_notifications.h \
   node/mempool_args.h \
   node/mempool_persist_args.h \
   node/miner.h \
+  node/mini_miner.h \
   node/minisketchwrapper.h \
   node/psbt.h \
   node/transaction.h \
@@ -255,6 +267,7 @@ BITCOIN_CORE_H = \
   shutdown.h \
   signet.h \
   streams.h \
+  support/allocators/pool.h \
   support/allocators/secure.h \
   support/allocators/zeroafterfree.h \
   support/cleanse.h \
@@ -269,19 +282,26 @@ BITCOIN_CORE_H = \
   txorphanage.h \
   txrequest.h \
   undo.h \
+  util/any.h \
   util/asmap.h \
+  util/batchpriority.h \
   util/bip32.h \
   util/bitdeque.h \
   util/bytevectorhash.h \
+  util/chaintype.h \
   util/check.h \
   util/epochguard.h \
   util/error.h \
+  util/exception.h \
   util/fastrange.h \
   util/fees.h \
+  util/fs.h \
+  util/fs_helpers.h \
   util/getuniquepath.h \
   util/golombrice.h \
   util/hash_type.h \
   util/hasher.h \
+  util/insert.h \
   util/macros.h \
   util/message.h \
   util/moneystr.h \
@@ -291,13 +311,11 @@ BITCOIN_CORE_H = \
   util/readwritefile.h \
   util/result.h \
   util/serfloat.h \
-  util/settings.h \
+  util/signalinterrupt.h \
   util/sock.h \
   util/spanparsing.h \
   util/string.h \
-  util/syscall_sandbox.h \
   util/syserror.h \
-  util/system.h \
   util/thread.h \
   util/threadinterrupt.h \
   util/threadnames.h \
@@ -321,7 +339,6 @@ BITCOIN_CORE_H = \
   wallet/external_signer_scriptpubkeyman.h \
   wallet/feebumper.h \
   wallet/fees.h \
-  wallet/ismine.h \
   wallet/load.h \
   wallet/receive.h \
   wallet/rpc/util.h \
@@ -331,6 +348,7 @@ BITCOIN_CORE_H = \
   wallet/spend.h \
   wallet/sqlite.h \
   wallet/transaction.h \
+  wallet/types.h \
   wallet/wallet.h \
   wallet/walletdb.h \
   wallet/wallettool.h \
@@ -346,7 +364,7 @@ BITCOIN_CORE_H = \
 
 obj/build.h: FORCE
 	@$(MKDIR_P) $(builddir)/obj
-	@$(top_srcdir)/share/genbuild.sh "$(abs_top_builddir)/src/obj/build.h" \
+	$(AM_V_GEN) $(top_srcdir)/share/genbuild.sh "$(abs_top_builddir)/src/obj/build.h" \
 	  "$(abs_top_srcdir)"
 libbitcoin_util_a-clientversion.$(OBJEXT): obj/build.h
 
@@ -383,19 +401,25 @@ libbitcoin_node_a_SOURCES = \
   net.cpp \
   net_processing.cpp \
   netgroup.cpp \
+  node/abort.cpp \
+  node/blockmanager_args.cpp \
   node/blockstorage.cpp \
   node/caches.cpp \
   node/chainstate.cpp \
   node/chainstatemanager_args.cpp \
   node/coin.cpp \
+  node/coins_view_args.cpp \
   node/connection_types.cpp \
   node/context.cpp \
+  node/database_args.cpp \
   node/eviction.cpp \
   node/interface_ui.cpp \
   node/interfaces.cpp \
+  node/kernel_notifications.cpp \
   node/mempool_args.cpp \
   node/mempool_persist_args.cpp \
   node/miner.cpp \
+  node/mini_miner.cpp \
   node/minisketchwrapper.cpp \
   node/psbt.cpp \
   node/transaction.cpp \
@@ -635,15 +659,21 @@ libbitcoin_common_a_SOURCES = \
   bech32.cpp \
   chainparams.cpp \
   coins.cpp \
+  common/args.cpp \
   common/bloom.cpp \
+  common/config.cpp \
+  common/init.cpp \
   common/interfaces.cpp \
   common/run_command.cpp \
+  common/settings.cpp \
+  common/system.cpp \
   compressor.cpp \
   core_read.cpp \
   core_write.cpp \
   deploymentinfo.cpp \
   external_signer.cpp \
   init/common.cpp \
+  kernel/chainparams.cpp \
   key.cpp \
   key_io.cpp \
   merkleblock.cpp \
@@ -682,28 +712,31 @@ libbitcoin_util_a_SOURCES = \
   support/lockedpool.cpp \
   chainparamsbase.cpp \
   clientversion.cpp \
-  fs.cpp \
   logging.cpp \
   random.cpp \
   randomenv.cpp \
   support/cleanse.cpp \
   sync.cpp \
   util/asmap.cpp \
+  util/batchpriority.cpp \
   util/bip32.cpp \
   util/bytevectorhash.cpp \
+  util/chaintype.cpp \
   util/check.cpp \
   util/error.cpp \
+  util/exception.cpp \
   util/fees.cpp \
+  util/fs.cpp \
+  util/fs_helpers.cpp \
   util/getuniquepath.cpp \
   util/hasher.cpp \
   util/sock.cpp \
   util/syserror.cpp \
-  util/system.cpp \
   util/message.cpp \
   util/moneystr.cpp \
   util/rbf.cpp \
   util/readwritefile.cpp \
-  util/settings.cpp \
+  util/signalinterrupt.cpp \
   util/thread.cpp \
   util/threadinterrupt.cpp \
   util/threadnames.cpp \
@@ -711,7 +744,6 @@ libbitcoin_util_a_SOURCES = \
   util/spanparsing.cpp \
   util/strencodings.cpp \
   util/string.cpp \
-  util/syscall_sandbox.cpp \
   util/time.cpp \
   util/tokenpipe.cpp \
   $(BITCOIN_CORE_H)
@@ -851,11 +883,12 @@ bitcoin_chainstate_SOURCES = bitcoin-chainstate.cpp
 bitcoin_chainstate_CPPFLAGS = $(AM_CPPFLAGS) $(BITCOIN_INCLUDES) $(BOOST_CPPFLAGS)
 bitcoin_chainstate_CXXFLAGS = $(AM_CXXFLAGS) $(PIE_FLAGS)
 
-# $(LIBTOOL_APP_LDFLAGS) deliberately omitted here so that we can test linking
-# bitcoin-chainstate against libbitcoinkernel as a shared or static library by
-# setting --{en,dis}able-shared.
-bitcoin_chainstate_LDFLAGS = $(RELDFLAGS) $(AM_LDFLAGS) $(PTHREAD_FLAGS)
+bitcoin_chainstate_LDFLAGS = $(RELDFLAGS) $(AM_LDFLAGS) $(PTHREAD_FLAGS) $(LIBTOOL_APP_LDFLAGS) -static
 bitcoin_chainstate_LDADD = $(LIBBITCOINKERNEL)
+
+# libtool is unable to calculate this indirect dependency, presumably because it's a subproject.
+# libsecp256k1 only needs to be linked in when libbitcoinkernel is static.
+bitcoin_chainstate_LDADD += $(LIBSECP256K1)
 #
 
 # bitcoinkernel library #
@@ -874,15 +907,6 @@ libbitcoinkernel_la_CPPFLAGS = $(AM_CPPFLAGS) -I$(builddir)/obj -I$(srcdir)/secp
 # to export from the library.
 libbitcoinkernel_la_CXXFLAGS = $(AM_CXXFLAGS) $(PIE_FLAGS) -fvisibility=default
 
-# TODO: For now, Specify -static in both CXXFLAGS and LDFLAGS when building for
-#       windows targets so libtool will only build a static version of this
-#       library. There are unresolved problems when building dll's for mingw-w64
-#       and attempting to statically embed libstdc++, libpthread, etc.
-if TARGET_WINDOWS
-libbitcoinkernel_la_LDFLAGS += -static
-libbitcoinkernel_la_CXXFLAGS += -static
-endif
-
 # TODO: libbitcoinkernel is a work in progress consensus engine library, as more
 #       and more modules are decoupled from the consensus engine, this list will
 #       shrink to only those which are absolutely necessary.
@@ -890,8 +914,6 @@ libbitcoinkernel_la_SOURCES = \
   kernel/bitcoinkernel.cpp \
   arith_uint256.cpp \
   chain.cpp \
-  chainparamsbase.cpp \
-  chainparams.cpp \
   clientversion.cpp \
   coins.cpp \
   compressor.cpp \
@@ -903,10 +925,10 @@ libbitcoinkernel_la_SOURCES = \
   deploymentinfo.cpp \
   deploymentstatus.cpp \
   flatfile.cpp \
-  fs.cpp \
   hash.cpp \
   kernel/chain.cpp \
   kernel/checks.cpp \
+  kernel/chainparams.cpp \
   kernel/coinstats.cpp \
   kernel/context.cpp \
   kernel/cs_main.cpp \
@@ -915,7 +937,6 @@ libbitcoinkernel_la_SOURCES = \
   logging.cpp \
   node/blockstorage.cpp \
   node/chainstate.cpp \
-  node/interface_ui.cpp \
   node/utxo_snapshot.cpp \
   policy/feerate.cpp \
   policy/fees.cpp \
@@ -935,7 +956,6 @@ libbitcoinkernel_la_SOURCES = \
   script/script_error.cpp \
   script/sigcache.cpp \
   script/standard.cpp \
-  shutdown.cpp \
   signet.cpp \
   support/cleanse.cpp \
   support/lockedpool.cpp \
@@ -943,18 +963,21 @@ libbitcoinkernel_la_SOURCES = \
   txdb.cpp \
   txmempool.cpp \
   uint256.cpp \
+  util/batchpriority.cpp \
+  util/chaintype.cpp \
   util/check.cpp \
+  util/exception.cpp \
+  util/fs.cpp \
+  util/fs_helpers.cpp \
   util/getuniquepath.cpp \
   util/hasher.cpp \
   util/moneystr.cpp \
   util/rbf.cpp \
   util/serfloat.cpp \
-  util/settings.cpp \
+  util/signalinterrupt.cpp \
   util/strencodings.cpp \
   util/string.cpp \
-  util/syscall_sandbox.cpp \
   util/syserror.cpp \
-  util/system.cpp \
   util/thread.cpp \
   util/threadnames.cpp \
   util/time.cpp \
@@ -1030,7 +1053,7 @@ clean-local:
 	-rm -rf test/__pycache__
 
 .rc.o:
-	@test -f $(WINDRES)
+	@test -f $(WINDRES) || (echo "windres $(WINDRES) not found, but is required to compile windows resource files"; exit 1)
 	## FIXME: How to get the appropriate modulename_CPPFLAGS in here?
 	$(AM_V_GEN) $(WINDRES) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(CPPFLAGS) -DWINDRES_PREPROC -i $< -o $@
 
@@ -1085,12 +1108,11 @@ endif
 
 %.raw.h: %.raw
 	@$(MKDIR_P) $(@D)
-	@{ \
+	$(AM_V_GEN) { \
 	 echo "static unsigned const char $(*F)_raw[] = {" && \
 	 $(HEXDUMP) -v -e '8/1 "0x%02x, "' -e '"\n"' $< | $(SED) -e 's/0x  ,//g' && \
 	 echo "};"; \
 	} > "$@.new" && mv -f "$@.new" "$@"
-	@echo "Generated $@"
 
 include Makefile.minisketch.include
 

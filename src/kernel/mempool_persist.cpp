@@ -6,16 +6,16 @@
 
 #include <clientversion.h>
 #include <consensus/amount.h>
-#include <fs.h>
 #include <logging.h>
 #include <primitives/transaction.h>
 #include <serialize.h>
-#include <shutdown.h>
 #include <streams.h>
 #include <sync.h>
 #include <txmempool.h>
 #include <uint256.h>
-#include <util/system.h>
+#include <util/fs.h>
+#include <util/fs_helpers.h>
+#include <util/signalinterrupt.h>
 #include <util/time.h>
 #include <validation.h>
 
@@ -95,7 +95,7 @@ bool LoadMempool(CTxMemPool& pool, const fs::path& load_path, Chainstate& active
             } else {
                 ++expired;
             }
-            if (ShutdownRequested())
+            if (active_chainstate.m_chainman.m_interrupt)
                 return false;
         }
         std::map<uint256, CAmount> mapDeltas;

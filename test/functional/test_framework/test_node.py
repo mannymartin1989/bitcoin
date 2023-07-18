@@ -22,7 +22,10 @@ import shlex
 import sys
 from pathlib import Path
 
-from .authproxy import JSONRPCException
+from .authproxy import (
+    JSONRPCException,
+    serialization_fallback,
+)
 from .descriptors import descsum_create
 from .p2p import P2P_SUBVERSION
 from .util import (
@@ -35,7 +38,6 @@ from .util import (
     rpc_url,
     wait_until_helper,
     p2p_port,
-    EncodeDecimal,
 )
 
 BITCOIND_PROC_WAIT_TIMEOUT = 60
@@ -190,7 +192,7 @@ class TestNode():
             assert self.rpc_connected and self.rpc is not None, self._node_msg("Error: no RPC connection")
             return getattr(RPCOverloadWrapper(self.rpc, descriptors=self.descriptors), name)
 
-    def start(self, extra_args=None, *, cwd=None, stdout=None, stderr=None, **kwargs):
+    def start(self, extra_args=None, *, cwd=None, stdout=None, stderr=None, env=None, **kwargs):
         """Start the node."""
         if extra_args is None:
             extra_args = self.extra_args
@@ -213,6 +215,8 @@ class TestNode():
 
         # add environment variable LIBC_FATAL_STDERR_=1 so that libc errors are written to stderr and not the terminal
         subp_env = dict(os.environ, LIBC_FATAL_STDERR_="1")
+        if env is not None:
+            subp_env.update(env)
 
         self.process = subprocess.Popen(self.args + extra_args, env=subp_env, stdout=stdout, stderr=stderr, cwd=cwd, **kwargs)
 
@@ -246,7 +250,7 @@ class TestNode():
                     # Wait for the node to finish reindex, block import, and
                     # loading the mempool. Usually importing happens fast or
                     # even "immediate" when the node is started. However, there
-                    # is no guarantee and sometimes ThreadImport might finish
+                    # is no guarantee and sometimes ImportBlocks might finish
                     # later. This is going to cause intermittent test failures,
                     # because generally the tests assume the node is fully
                     # ready after being started.
@@ -349,21 +353,13 @@ class TestNode():
         for profile_name in tuple(self.perf_subprocesses.keys()):
             self._stop_perf(profile_name)
 
-        # Check that stderr is as expected
-        self.stderr.seek(0)
-        stderr = self.stderr.read().decode('utf-8').strip()
-        if stderr != expected_stderr:
-            raise AssertionError("Unexpected stderr {} != {}".format(stderr, expected_stderr))
-
-        self.stdout.close()
-        self.stderr.close()
-
         del self.p2ps[:]
 
+        assert (not expected_stderr) or wait_until_stopped  # Must wait to check stderr
         if wait_until_stopped:
-            self.wait_until_stopped()
+            self.wait_until_stopped(expected_stderr=expected_stderr)
 
-    def is_node_stopped(self):
+    def is_node_stopped(self, *, expected_stderr="", expected_ret_code=0):
         """Checks whether the node has stopped.
 
         Returns True if the node has stopped. False otherwise.
@@ -375,8 +371,17 @@ class TestNode():
             return False
 
         # process has stopped. Assert that it didn't return an error code.
-        assert return_code == 0, self._node_msg(
-            "Node returned non-zero exit code (%d) when stopping" % return_code)
+        assert return_code == expected_ret_code, self._node_msg(
+            f"Node returned unexpected exit code ({return_code}) vs ({expected_ret_code}) when stopping")
+        # Check that stderr is as expected
+        self.stderr.seek(0)
+        stderr = self.stderr.read().decode('utf-8').strip()
+        if stderr != expected_stderr:
+            raise AssertionError("Unexpected stderr {} != {}".format(stderr, expected_stderr))
+
+        self.stdout.close()
+        self.stderr.close()
+
         self.running = False
         self.process = None
         self.rpc_connected = False
@@ -384,8 +389,9 @@ class TestNode():
         self.log.debug("Node stopped")
         return True
 
-    def wait_until_stopped(self, timeout=BITCOIND_PROC_WAIT_TIMEOUT):
-        wait_until_helper(self.is_node_stopped, timeout=timeout, timeout_factor=self.timeout_factor)
+    def wait_until_stopped(self, *, timeout=BITCOIND_PROC_WAIT_TIMEOUT, expect_error=False, **kwargs):
+        expected_ret_code = 1 if expect_error else 0  # Whether node shutdown return EXIT_FAILURE or EXIT_SUCCESS
+        wait_until_helper(lambda: self.is_node_stopped(expected_ret_code=expected_ret_code, **kwargs), timeout=timeout, timeout_factor=self.timeout_factor)
 
     def replace_in_config(self, replacements):
         """
@@ -403,12 +409,20 @@ class TestNode():
             conf.write(conf_data)
 
     @property
+    def datadir_path(self) -> Path:
+        return Path(self.datadir)
+
+    @property
     def chain_path(self) -> Path:
-        return Path(self.datadir) / self.chain
+        return self.datadir_path / self.chain
 
     @property
     def debug_log_path(self) -> Path:
         return self.chain_path / 'debug.log'
+
+    @property
+    def wallets_path(self) -> Path:
+        return self.chain_path / "wallets"
 
     def debug_log_bytes(self) -> int:
         with open(self.debug_log_path, encoding='utf-8') as dl:
@@ -469,7 +483,7 @@ class TestNode():
                 return
 
             if time.time() >= time_end:
-                print_log = " - " + "\n - ".join(log.splitlines())
+                print_log = " - " + "\n - ".join(log.decode("utf8", errors="replace").splitlines())
                 break
 
             # No sleep here because we want to detect the message fragment as fast as
@@ -701,7 +715,7 @@ def arg_to_cli(arg):
     elif arg is None:
         return 'null'
     elif isinstance(arg, dict) or isinstance(arg, list):
-        return json.dumps(arg, default=EncodeDecimal)
+        return json.dumps(arg, default=serialization_fallback)
     else:
         return str(arg)
 
@@ -829,7 +843,7 @@ class RPCOverloadWrapper():
             int(address ,16)
             is_hex = True
             desc = descsum_create('raw(' + address + ')')
-        except:
+        except Exception:
             desc = descsum_create('addr(' + address + ')')
         reqs = [{
             'desc': desc,

@@ -32,7 +32,10 @@ bool CCoinsViewBacked::BatchWrite(CCoinsMap &mapCoins, const uint256 &hashBlock,
 std::unique_ptr<CCoinsViewCursor> CCoinsViewBacked::Cursor() const { return base->Cursor(); }
 size_t CCoinsViewBacked::EstimateSize() const { return base->EstimateSize(); }
 
-CCoinsViewCache::CCoinsViewCache(CCoinsView* baseIn) : CCoinsViewBacked(baseIn) {}
+CCoinsViewCache::CCoinsViewCache(CCoinsView* baseIn, bool deterministic) :
+    CCoinsViewBacked(baseIn), m_deterministic(deterministic),
+    cacheCoins(0, SaltedOutpointHasher(/*deterministic=*/deterministic), CCoinsMap::key_equal{}, &m_cache_coins_memory_resource)
+{}
 
 size_t CCoinsViewCache::DynamicMemoryUsage() const {
     return memusage::DynamicUsage(cacheCoins) + cachedCoinsUsage;
@@ -250,9 +253,12 @@ bool CCoinsViewCache::BatchWrite(CCoinsMap &mapCoins, const uint256 &hashBlockIn
 
 bool CCoinsViewCache::Flush() {
     bool fOk = base->BatchWrite(cacheCoins, hashBlock, /*erase=*/true);
-    if (fOk && !cacheCoins.empty()) {
-        /* BatchWrite must erase all cacheCoins elements when erase=true. */
-        throw std::logic_error("Not all cached coins were erased");
+    if (fOk) {
+        if (!cacheCoins.empty()) {
+            /* BatchWrite must erase all cacheCoins elements when erase=true. */
+            throw std::logic_error("Not all cached coins were erased");
+        }
+        ReallocateCache();
     }
     cachedCoinsUsage = 0;
     return fOk;
@@ -311,7 +317,26 @@ void CCoinsViewCache::ReallocateCache()
     // Cache should be empty when we're calling this.
     assert(cacheCoins.size() == 0);
     cacheCoins.~CCoinsMap();
-    ::new (&cacheCoins) CCoinsMap();
+    m_cache_coins_memory_resource.~CCoinsMapMemoryResource();
+    ::new (&m_cache_coins_memory_resource) CCoinsMapMemoryResource{};
+    ::new (&cacheCoins) CCoinsMap{0, SaltedOutpointHasher{/*deterministic=*/m_deterministic}, CCoinsMap::key_equal{}, &m_cache_coins_memory_resource};
+}
+
+void CCoinsViewCache::SanityCheck() const
+{
+    size_t recomputed_usage = 0;
+    for (const auto& [_, entry] : cacheCoins) {
+        unsigned attr = 0;
+        if (entry.flags & CCoinsCacheEntry::DIRTY) attr |= 1;
+        if (entry.flags & CCoinsCacheEntry::FRESH) attr |= 2;
+        if (entry.coin.IsSpent()) attr |= 4;
+        // Only 5 combinations are possible.
+        assert(attr != 2 && attr != 4 && attr != 7);
+
+        // Recompute cachedCoinsUsage.
+        recomputed_usage += entry.coin.DynamicMemoryUsage();
+    }
+    assert(recomputed_usage == cachedCoinsUsage);
 }
 
 static const size_t MIN_TRANSACTION_OUTPUT_WEIGHT = WITNESS_SCALE_FACTOR * ::GetSerializeSize(CTxOut(), PROTOCOL_VERSION);
