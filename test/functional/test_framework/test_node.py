@@ -144,6 +144,8 @@ class TestNode():
         self.p2ps = []
         self.timeout_factor = timeout_factor
 
+        self.mocktime = None
+
     AddressKeyPair = collections.namedtuple('AddressKeyPair', ['address', 'key'])
     PRIV_KEYS = [
             # address , privkey
@@ -324,6 +326,15 @@ class TestNode():
         assert not invalid_call
         return self.__getattr__('generatetodescriptor')(*args, **kwargs)
 
+    def setmocktime(self, timestamp):
+        """Wrapper for setmocktime RPC, sets self.mocktime"""
+        if timestamp == 0:
+            # setmocktime(0) resets to system time.
+            self.mocktime = None
+        else:
+            self.mocktime = timestamp
+        return self.__getattr__('setmocktime')(timestamp)
+
     def get_wallet_rpc(self, wallet_name):
         if self.use_cli:
             return RPCOverloadWrapper(self.cli("-rpcwallet={}".format(wallet_name)), True, self.descriptors)
@@ -421,11 +432,15 @@ class TestNode():
         return self.chain_path / 'debug.log'
 
     @property
+    def blocks_path(self) -> Path:
+        return self.chain_path / "blocks"
+
+    @property
     def wallets_path(self) -> Path:
         return self.chain_path / "wallets"
 
-    def debug_log_bytes(self) -> int:
-        with open(self.debug_log_path, encoding='utf-8') as dl:
+    def debug_log_size(self, **kwargs) -> int:
+        with open(self.debug_log_path, **kwargs) as dl:
             dl.seek(0, 2)
             return dl.tell()
 
@@ -434,13 +449,13 @@ class TestNode():
         if unexpected_msgs is None:
             unexpected_msgs = []
         time_end = time.time() + timeout * self.timeout_factor
-        prev_size = self.debug_log_bytes()
+        prev_size = self.debug_log_size(encoding="utf-8")  # Must use same encoding that is used to read() below
 
         yield
 
         while True:
             found = True
-            with open(self.debug_log_path, encoding='utf-8') as dl:
+            with open(self.debug_log_path, encoding="utf-8", errors="replace") as dl:
                 dl.seek(prev_size)
                 log = dl.read()
             print_log = " - " + "\n - ".join(log.splitlines())
@@ -465,7 +480,7 @@ class TestNode():
             the number of log lines we encountered when matching
         """
         time_end = time.time() + timeout * self.timeout_factor
-        prev_size = self.debug_log_bytes()
+        prev_size = self.debug_log_size(mode="rb")  # Must use same mode that is used to read() below
 
         yield
 
@@ -644,10 +659,14 @@ class TestNode():
             # in comparison to the upside of making tests less fragile and unexpected intermittent errors less likely.
             p2p_conn.sync_with_ping()
 
-            # Consistency check that the Bitcoin Core has received our user agent string. This checks the
-            # node's newest peer. It could be racy if another Bitcoin Core node has connected since we opened
-            # our connection, but we don't expect that to happen.
-            assert_equal(self.getpeerinfo()[-1]['subver'], P2P_SUBVERSION)
+            # Consistency check that the node received our user agent string.
+            # Find our connection in getpeerinfo by our address:port and theirs, as this combination is unique.
+            sockname = p2p_conn._transport.get_extra_info("socket").getsockname()
+            our_addr_and_port = f"{sockname[0]}:{sockname[1]}"
+            dst_addr_and_port = f"{p2p_conn.dstaddr}:{p2p_conn.dstport}"
+            info = [peer for peer in self.getpeerinfo() if peer["addr"] == our_addr_and_port and peer["addrbind"] == dst_addr_and_port]
+            assert_equal(len(info), 1)
+            assert_equal(info[0]["subver"], P2P_SUBVERSION)
 
         return p2p_conn
 
@@ -695,6 +714,13 @@ class TestNode():
         del self.p2ps[:]
 
         wait_until_helper(lambda: self.num_test_p2p_connections() == 0, timeout_factor=self.timeout_factor)
+
+    def bumpmocktime(self, seconds):
+        """Fast forward using setmocktime to self.mocktime + seconds. Requires setmocktime to have
+        been called at some point in the past."""
+        assert self.mocktime
+        self.mocktime += seconds
+        self.setmocktime(self.mocktime)
 
 
 class TestNodeCLIAttr:

@@ -8,6 +8,7 @@
 #include <common/system.h>
 #include <key_io.h>
 #include <protocol.h>
+#include <script/script.h>
 #include <serialize.h>
 #include <sync.h>
 #include <util/bip32.h>
@@ -794,11 +795,13 @@ static DBErrors LoadDescriptorWalletRecords(CWallet* pwallet, DatabaseBatch& bat
         WalletDescriptor desc;
         try {
             value >> desc;
-        } catch (const std::ios_base::failure&) {
+        } catch (const std::ios_base::failure& e) {
             strErr = strprintf("Error: Unrecognized descriptor found in wallet %s. ", pwallet->GetName());
             strErr += (last_client > CLIENT_VERSION) ? "The wallet might had been created on a newer version. " :
                     "The database might be corrupted or the software version is not compatible with one of your wallet descriptors. ";
             strErr += "Please try running the latest software version";
+            // Also include error details
+            strErr = strprintf("%s\nDetails: %s", strErr, e.what());
             return DBErrors::UNKNOWN_DESCRIPTOR;
         }
         pwallet->LoadDescriptorScriptPubKeyMan(id, desc);

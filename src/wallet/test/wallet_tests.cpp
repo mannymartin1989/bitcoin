@@ -9,15 +9,19 @@
 #include <stdint.h>
 #include <vector>
 
+#include <addresstype.h>
 #include <interfaces/chain.h>
 #include <key_io.h>
 #include <node/blockstorage.h>
 #include <policy/policy.h>
 #include <rpc/server.h>
+#include <script/solver.h>
 #include <test/util/logging.h>
+#include <test/util/random.h>
 #include <test/util/setup_common.h>
 #include <util/translation.h>
 #include <validation.h>
+#include <validationinterface.h>
 #include <wallet/coincontrol.h>
 #include <wallet/context.h>
 #include <wallet/receive.h>

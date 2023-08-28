@@ -9,7 +9,8 @@
 #include <pubkey.h>
 #include <script/miniscript.h>
 #include <script/script.h>
-#include <script/standard.h>
+#include <script/signingprovider.h>
+#include <script/solver.h>
 #include <uint256.h>
 
 #include <common/args.h>
@@ -1722,6 +1723,10 @@ std::unique_ptr<DescriptorImpl> InferScript(const CScript& script, ParseScriptCo
             return std::make_unique<MiniscriptDescriptor>(std::move(parser.m_keys), std::move(node));
         }
     }
+
+    // The following descriptors are all top-level only descriptors.
+    // So if we are not at the top level, return early.
+    if (ctx != ParseScriptContext::TOP) return nullptr;
 
     CTxDestination dest;
     if (ExtractDestination(script, dest)) {

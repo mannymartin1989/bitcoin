@@ -155,12 +155,12 @@ void CTxMemPool::UpdateTransactionsFromBlock(const std::vector<uint256>& vHashes
 }
 
 util::Result<CTxMemPool::setEntries> CTxMemPool::CalculateAncestorsAndCheckLimits(
-    size_t entry_size,
+    int64_t entry_size,
     size_t entry_count,
     CTxMemPoolEntry::Parents& staged_ancestors,
     const Limits& limits) const
 {
-    size_t totalSizeWithAncestors = entry_size;
+    int64_t totalSizeWithAncestors = entry_size;
     setEntries ancestors;
 
     while (!staged_ancestors.empty()) {
@@ -171,11 +171,11 @@ util::Result<CTxMemPool::setEntries> CTxMemPool::CalculateAncestorsAndCheckLimit
         staged_ancestors.erase(stage);
         totalSizeWithAncestors += stageit->GetTxSize();
 
-        if (stageit->GetSizeWithDescendants() + entry_size > static_cast<uint64_t>(limits.descendant_size_vbytes)) {
+        if (stageit->GetSizeWithDescendants() + entry_size > limits.descendant_size_vbytes) {
             return util::Error{Untranslated(strprintf("exceeds descendant size limit for tx %s [limit: %u]", stageit->GetTx().GetHash().ToString(), limits.descendant_size_vbytes))};
         } else if (stageit->GetCountWithDescendants() + entry_count > static_cast<uint64_t>(limits.descendant_count)) {
             return util::Error{Untranslated(strprintf("too many descendants for tx %s [limit: %u]", stageit->GetTx().GetHash().ToString(), limits.descendant_count))};
-        } else if (totalSizeWithAncestors > static_cast<uint64_t>(limits.ancestor_size_vbytes)) {
+        } else if (totalSizeWithAncestors > limits.ancestor_size_vbytes) {
             return util::Error{Untranslated(strprintf("exceeds ancestor size limit [limit: %u]", limits.ancestor_size_vbytes))};
         }
 
@@ -201,7 +201,7 @@ bool CTxMemPool::CheckPackageLimits(const Package& package,
                                     std::string &errString) const
 {
     CTxMemPoolEntry::Parents staged_ancestors;
-    size_t total_size = 0;
+    int64_t total_size = 0;
     for (const auto& tx : package) {
         total_size += GetVirtualTransactionSize(*tx);
         for (const auto& input : tx->vin) {
@@ -853,6 +853,17 @@ TxMempoolInfo CTxMemPool::info(const GenTxid& gtxid) const
     return GetInfo(i);
 }
 
+TxMempoolInfo CTxMemPool::info_for_relay(const GenTxid& gtxid, uint64_t last_sequence) const
+{
+    LOCK(cs);
+    indexed_transaction_set::const_iterator i = (gtxid.IsWtxid() ? get_iter_from_wtxid(gtxid.GetHash()) : mapTx.find(gtxid.GetHash()));
+    if (i != mapTx.end() && i->GetSequence() < last_sequence) {
+        return GetInfo(i);
+    } else {
+        return TxMempoolInfo();
+    }
+}
+
 void CTxMemPool::PrioritiseTransaction(const uint256& hash, const CAmount& nFeeDelta)
 {
     {
@@ -1184,19 +1195,6 @@ void CTxMemPool::SetLoadTried(bool load_tried)
 {
     LOCK(cs);
     m_load_tried = load_tried;
-}
-
-std::string RemovalReasonToString(const MemPoolRemovalReason& r) noexcept
-{
-    switch (r) {
-        case MemPoolRemovalReason::EXPIRY: return "expiry";
-        case MemPoolRemovalReason::SIZELIMIT: return "sizelimit";
-        case MemPoolRemovalReason::REORG: return "reorg";
-        case MemPoolRemovalReason::BLOCK: return "block";
-        case MemPoolRemovalReason::CONFLICT: return "conflict";
-        case MemPoolRemovalReason::REPLACED: return "replaced";
-    }
-    assert(false);
 }
 
 std::vector<CTxMemPool::txiter> CTxMemPool::GatherClusters(const std::vector<uint256>& txids) const

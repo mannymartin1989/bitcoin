@@ -1260,7 +1260,7 @@ RPCHelpMan getblockchaininfo()
     obj.pushKV("time", tip.GetBlockTime());
     obj.pushKV("mediantime", tip.GetMedianTimePast());
     obj.pushKV("verificationprogress", GuessVerificationProgress(chainman.GetParams().TxData(), &tip));
-    obj.pushKV("initialblockdownload", active_chainstate.IsInitialBlockDownload());
+    obj.pushKV("initialblockdownload", chainman.IsInitialBlockDownload());
     obj.pushKV("chainwork", tip.nChainWork.GetHex());
     obj.pushKV("size_on_disk", chainman.m_blockman.CalculateCurrentUsage());
     obj.pushKV("pruned", chainman.m_blockman.IsPruneMode());
@@ -2312,7 +2312,7 @@ static RPCHelpMan scanblocks()
                 {
                     {"filter_false_positives", RPCArg::Type::BOOL, RPCArg::Default{false}, "Filter false positives (slower and may fail on pruned nodes). Otherwise they may occur at a rate of 1/M"},
                 },
-                RPCArgOptions{.oneline_description="\"options\""}},
+                RPCArgOptions{.oneline_description="options"}},
         },
         {
             scan_result_status_none,

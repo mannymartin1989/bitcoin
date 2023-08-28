@@ -18,6 +18,7 @@
 #include <interfaces/wallet.h>
 #include <kernel/chain.h>
 #include <kernel/mempool_entry.h>
+#include <logging.h>
 #include <mapport.h>
 #include <net.h>
 #include <net_processing.h>
@@ -297,8 +298,9 @@ public:
     {
         return GuessVerificationProgress(chainman().GetParams().TxData(), WITH_LOCK(::cs_main, return chainman().ActiveChain().Tip()));
     }
-    bool isInitialBlockDownload() override {
-        return chainman().ActiveChainstate().IsInitialBlockDownload();
+    bool isInitialBlockDownload() override
+    {
+        return chainman().IsInitialBlockDownload();
     }
     bool isLoadingBlocks() override { return chainman().m_blockman.LoadingBlocks(); }
     void setNetworkActive(bool active) override
@@ -676,7 +678,7 @@ public:
     {
         if (!m_node.mempool) return true;
         LockPoints lp;
-        CTxMemPoolEntry entry(tx, 0, 0, 0, false, 0, lp);
+        CTxMemPoolEntry entry(tx, 0, 0, 0, 0, false, 0, lp);
         const CTxMemPool::Limits& limits{m_node.mempool->m_limits};
         LOCK(m_node.mempool->cs);
         return m_node.mempool->CalculateMemPoolAncestors(entry, limits).has_value();
@@ -719,7 +721,7 @@ public:
     bool isReadyToBroadcast() override { return !chainman().m_blockman.LoadingBlocks() && !isInitialBlockDownload(); }
     bool isInitialBlockDownload() override
     {
-        return chainman().ActiveChainstate().IsInitialBlockDownload();
+        return chainman().IsInitialBlockDownload();
     }
     bool shutdownRequested() override { return ShutdownRequested(); }
     void initMessage(const std::string& message) override { ::uiInterface.InitMessage(message); }

@@ -6,9 +6,11 @@
 #include <string>
 #include <vector>
 
+#include <test/util/random.h>
 #include <test/util/setup_common.h>
 #include <boost/test/unit_test.hpp>
 
+#include <addresstype.h>
 #include <core_io.h>
 #include <hash.h>
 #include <pubkey.h>
@@ -17,7 +19,6 @@
 #include <crypto/sha256.h>
 #include <script/interpreter.h>
 #include <script/miniscript.h>
-#include <script/standard.h>
 #include <script/script_error.h>
 
 namespace {
