@@ -33,7 +33,6 @@
 #include <util/overflow.h>
 #include <util/strencodings.h>
 #include <util/string.h>
-#include <version.h>
 
 #include <cassert>
 #include <chrono>
@@ -214,7 +213,6 @@ FUZZ_TARGET(integer, .init = initialize_integer)
 
     {
         const ServiceFlags service_flags = (ServiceFlags)u64;
-        (void)HasAllDesirableServiceFlags(service_flags);
         (void)MayHaveUsefulAddressDB(service_flags);
     }
 

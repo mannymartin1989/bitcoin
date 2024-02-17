@@ -4,6 +4,7 @@
 
 #include <map>
 
+#include <clientversion.h>
 #include <common/args.h>
 #include <dbwrapper.h>
 #include <hash.h>
@@ -173,8 +174,8 @@ size_t BlockFilterIndex::WriteFilterToDisk(FlatFilePos& pos, const BlockFilter& 
     assert(filter.GetFilterType() == GetFilterType());
 
     size_t data_size =
-        GetSerializeSize(filter.GetBlockHash(), CLIENT_VERSION) +
-        GetSerializeSize(filter.GetEncodedFilter(), CLIENT_VERSION);
+        GetSerializeSize(filter.GetBlockHash()) +
+        GetSerializeSize(filter.GetEncodedFilter());
 
     // If writing the filter would overflow the file, flush and move to the next one.
     if (pos.nPos + data_size > MAX_FLTR_FILE_SIZE) {
@@ -260,7 +261,7 @@ bool BlockFilterIndex::CustomAppend(const interfaces::BlockInfo& block)
     return true;
 }
 
-static bool CopyHeightIndexToHashIndex(CDBIterator& db_it, CDBBatch& batch,
+[[nodiscard]] static bool CopyHeightIndexToHashIndex(CDBIterator& db_it, CDBBatch& batch,
                                        const std::string& index_name,
                                        int start_height, int stop_height)
 {

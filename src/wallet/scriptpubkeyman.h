@@ -22,6 +22,7 @@
 
 #include <boost/signals2/signal.hpp>
 
+#include <functional>
 #include <optional>
 #include <unordered_map>
 
@@ -46,10 +47,14 @@ public:
     virtual void UnsetBlankWalletFlag(WalletBatch&) = 0;
     virtual bool CanSupportFeature(enum WalletFeature) const = 0;
     virtual void SetMinVersion(enum WalletFeature, WalletBatch* = nullptr) = 0;
-    virtual const CKeyingMaterial& GetEncryptionKey() const = 0;
+    //! Pass the encryption key to cb().
+    virtual bool WithEncryptionKey(std::function<bool (const CKeyingMaterial&)> cb) const = 0;
     virtual bool HasEncryptionKeys() const = 0;
     virtual bool IsLocked() const = 0;
 };
+
+//! Constant representing an unknown spkm creation time
+static constexpr int64_t UNKNOWN_TIME = std::numeric_limits<int64_t>::max();
 
 //! Default for -keypool
 static const unsigned int DEFAULT_KEYPOOL_SIZE = 1000;
@@ -123,20 +128,14 @@ public:
     template<typename Stream>
     void Serialize(Stream& s) const
     {
-        int nVersion = s.GetVersion();
-        if (!(s.GetType() & SER_GETHASH)) {
-            s << nVersion;
-        }
+        s << int{259900}; // Unused field, writes the highest client version ever written
         s << nTime << vchPubKey << fInternal << m_pre_split;
     }
 
     template<typename Stream>
     void Unserialize(Stream& s)
     {
-        int nVersion = s.GetVersion();
-        if (!(s.GetType() & SER_GETHASH)) {
-            s >> nVersion;
-        }
+        s >> int{}; // Discard unused field
         s >> nTime >> vchPubKey;
         try {
             s >> fInternal;
@@ -180,7 +179,7 @@ public:
     virtual isminetype IsMine(const CScript& script) const { return ISMINE_NO; }
 
     //! Check that the given decryption key is valid for this ScriptPubKeyMan, i.e. it decrypts all of the keys handled by it.
-    virtual bool CheckDecryptionKey(const CKeyingMaterial& master_key, bool accept_no_keys = false) { return false; }
+    virtual bool CheckDecryptionKey(const CKeyingMaterial& master_key) { return false; }
     virtual bool Encrypt(const CKeyingMaterial& master_key, WalletBatch* batch) { return false; }
 
     virtual util::Result<CTxDestination> GetReservedDestination(const OutputType type, bool internal, int64_t& index, CKeyPool& keypool) { return util::Error{Untranslated("Not supported")}; }
@@ -292,7 +291,8 @@ private:
     WatchOnlySet setWatchOnly GUARDED_BY(cs_KeyStore);
     WatchKeyMap mapWatchKeys GUARDED_BY(cs_KeyStore);
 
-    int64_t nTimeFirstKey GUARDED_BY(cs_KeyStore) = 0;
+    // By default, do not scan any block until keys/scripts are generated/imported
+    int64_t nTimeFirstKey GUARDED_BY(cs_KeyStore) = UNKNOWN_TIME;
 
     //! Number of pre-generated keys/scripts (part of the look-ahead process, used to detect payments)
     int64_t m_keypool_size GUARDED_BY(cs_KeyStore){DEFAULT_KEYPOOL_SIZE};
@@ -372,14 +372,14 @@ private:
      */
     bool TopUpInactiveHDChain(const CKeyID seed_id, int64_t index, bool internal);
 
-    bool TopUpChain(CHDChain& chain, unsigned int size);
+    bool TopUpChain(WalletBatch& batch, CHDChain& chain, unsigned int size);
 public:
     LegacyScriptPubKeyMan(WalletStorage& storage, int64_t keypool_size) : ScriptPubKeyMan(storage), m_keypool_size(keypool_size) {}
 
     util::Result<CTxDestination> GetNewDestination(const OutputType type) override;
     isminetype IsMine(const CScript& script) const override;
 
-    bool CheckDecryptionKey(const CKeyingMaterial& master_key, bool accept_no_keys = false) override;
+    bool CheckDecryptionKey(const CKeyingMaterial& master_key) override;
     bool Encrypt(const CKeyingMaterial& master_key, WalletBatch* batch) override;
 
     util::Result<CTxDestination> GetReservedDestination(const OutputType type, bool internal, int64_t& index, CKeyPool& keypool) override;
@@ -525,6 +525,12 @@ public:
     std::set<CKeyID> GetKeys() const override;
     std::unordered_set<CScript, SaltedSipHasher> GetScriptPubKeys() const override;
 
+    /**
+     * Retrieves scripts that were imported by bugs into the legacy spkm and are
+     * simply invalid, such as a sh(sh(pkh())) script, or not watched.
+     */
+    std::unordered_set<CScript, SaltedSipHasher> GetNotMineScriptPubKeys() const;
+
     /** Get the DescriptorScriptPubKeyMans (with private keys) that have the same scriptPubKeys as this LegacyScriptPubKeyMan.
      * Does not modify this ScriptPubKeyMan. */
     std::optional<MigrationData> MigrateToDescriptor();
@@ -583,7 +589,10 @@ private:
     std::unique_ptr<FlatSigningProvider> GetSigningProvider(int32_t index, bool include_private = false) const EXCLUSIVE_LOCKS_REQUIRED(cs_desc_man);
 
 protected:
-  WalletDescriptor m_wallet_descriptor GUARDED_BY(cs_desc_man);
+    WalletDescriptor m_wallet_descriptor GUARDED_BY(cs_desc_man);
+
+    //! Same as 'TopUp' but designed for use within a batch transaction context
+    bool TopUpWithDB(WalletBatch& batch, unsigned int size = 0);
 
 public:
     DescriptorScriptPubKeyMan(WalletStorage& storage, WalletDescriptor& descriptor, int64_t keypool_size)
@@ -601,7 +610,7 @@ public:
     util::Result<CTxDestination> GetNewDestination(const OutputType type) override;
     isminetype IsMine(const CScript& script) const override;
 
-    bool CheckDecryptionKey(const CKeyingMaterial& master_key, bool accept_no_keys = false) override;
+    bool CheckDecryptionKey(const CKeyingMaterial& master_key) override;
     bool Encrypt(const CKeyingMaterial& master_key, WalletBatch* batch) override;
 
     util::Result<CTxDestination> GetReservedDestination(const OutputType type, bool internal, int64_t& index, CKeyPool& keypool) override;
@@ -618,12 +627,7 @@ public:
     bool IsHDEnabled() const override;
 
     //! Setup descriptors based on the given CExtkey
-    bool SetupDescriptorGeneration(const CExtKey& master_key, OutputType addr_type, bool internal);
-
-    /** Provide a descriptor at setup time
-    * Returns false if already setup or setup fails, true if setup is successful
-    */
-    bool SetupDescriptor(std::unique_ptr<Descriptor>desc);
+    bool SetupDescriptorGeneration(WalletBatch& batch, const CExtKey& master_key, OutputType addr_type, bool internal);
 
     bool HavePrivateKeys() const override;
 
