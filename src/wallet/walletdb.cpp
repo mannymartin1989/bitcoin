@@ -3,6 +3,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <config/bitcoin-config.h> // IWYU pragma: keep
+
 #include <wallet/walletdb.h>
 
 #include <common/system.h>
@@ -19,6 +21,7 @@
 #ifdef USE_BDB
 #include <wallet/bdb.h>
 #endif
+#include <wallet/migrate.h>
 #ifdef USE_SQLITE
 #include <wallet/sqlite.h>
 #endif
@@ -804,10 +807,10 @@ static DBErrors LoadDescriptorWalletRecords(CWallet* pwallet, DatabaseBatch& bat
             strErr = strprintf("%s\nDetails: %s", strErr, e.what());
             return DBErrors::UNKNOWN_DESCRIPTOR;
         }
-        pwallet->LoadDescriptorScriptPubKeyMan(id, desc);
+        DescriptorScriptPubKeyMan& spkm = pwallet->LoadDescriptorScriptPubKeyMan(id, desc);
 
         // Prior to doing anything with this spkm, verify ID compatibility
-        if (id != pwallet->GetDescriptorScriptPubKeyMan(desc)->GetID()) {
+        if (id != spkm.GetID()) {
             strErr = "The descriptor ID calculated by the wallet differs from the one in DB";
             return DBErrors::CORRUPT;
         }
@@ -1385,6 +1388,11 @@ std::unique_ptr<WalletDatabase> MakeDatabase(const fs::path& path, const Databas
         return nullptr;
     }
 
+    // If BERKELEY was the format, then change the format from BERKELEY to BERKELEY_RO
+    if (format && options.require_format && format == DatabaseFormat::BERKELEY && options.require_format == DatabaseFormat::BERKELEY_RO) {
+        format = DatabaseFormat::BERKELEY_RO;
+    }
+
     // A db already exists so format is set, but options also specifies the format, so make sure they agree
     if (format && options.require_format && format != options.require_format) {
         error = Untranslated(strprintf("Failed to load database path '%s'. Data is not in required format.", fs::PathToString(path)));
@@ -1416,6 +1424,10 @@ std::unique_ptr<WalletDatabase> MakeDatabase(const fs::path& path, const Databas
             status = DatabaseStatus::FAILED_BAD_FORMAT;
             return nullptr;
         }
+    }
+
+    if (format == DatabaseFormat::BERKELEY_RO) {
+        return MakeBerkeleyRODatabase(path, options, status, error);
     }
 
 #ifdef USE_BDB

@@ -10,10 +10,11 @@ export PATH=$PWD/ci/retry:$PATH
 
 ${CI_RETRY_EXE} apt-get update
 # Lint dependencies:
+# - automake pkg-config libtool (for lint_includes_build_config)
 # - curl/xz-utils (to install shellcheck)
 # - git (used in many lint scripts)
 # - gpg (used by verify-commits)
-${CI_RETRY_EXE} apt-get install -y curl xz-utils git gpg
+${CI_RETRY_EXE} apt-get install -y automake pkg-config libtool curl xz-utils git gpg
 
 PYTHON_PATH="/python_build"
 if [ ! -d "${PYTHON_PATH}/bin" ]; then
@@ -45,7 +46,7 @@ if [ ! -d "${LINT_RUNNER_PATH}" ]; then
 fi
 
 ${CI_RETRY_EXE} pip3 install \
-  codespell==2.2.5 \
+  codespell==2.2.6 \
   flake8==6.1.0 \
   lief==0.13.2 \
   mypy==1.4.1 \
@@ -56,3 +57,8 @@ SHELLCHECK_VERSION=v0.8.0
 curl -sL "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" | \
     tar --xz -xf - --directory /tmp/
 mv "/tmp/shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/bin/
+
+MLC_VERSION=v0.16.3
+MLC_BIN=mlc-x86_64-linux
+curl -sL "https://github.com/becheran/mlc/releases/download/${MLC_VERSION}/${MLC_BIN}" -o "/usr/bin/mlc"
+chmod +x /usr/bin/mlc

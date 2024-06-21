@@ -158,7 +158,7 @@ FUZZ_TARGET(coin_grinder_is_optimal)
         // Only make UTXOs with positive effective value
         const CAmount input_fee = coin_params.m_effective_feerate.GetFee(n_input_bytes);
         // Ensure that each UTXO has at least an effective value of 1 sat
-        const CAmount eff_value{fuzzed_data_provider.ConsumeIntegralInRange<CAmount>(1, MAX_MONEY - max_spendable - max_output_groups + group_pos.size())};
+        const CAmount eff_value{fuzzed_data_provider.ConsumeIntegralInRange<CAmount>(1, MAX_MONEY + group_pos.size() - max_spendable - max_output_groups)};
         const CAmount amount{eff_value + input_fee};
         std::vector<COutput> temp_utxo_pool;
 
@@ -270,7 +270,7 @@ FUZZ_TARGET(coinselection)
     if (result_srd) {
         assert(result_srd->GetSelectedValue() >= target);
         assert(result_srd->GetChange(CHANGE_LOWER, coin_params.m_change_fee) > 0); // Demonstrate that SRD creates change of at least CHANGE_LOWER
-        result_srd->ComputeAndSetWaste(coin_params.min_viable_change, coin_params.m_cost_of_change, coin_params.m_change_fee);
+        result_srd->RecalculateWaste(coin_params.min_viable_change, coin_params.m_cost_of_change, coin_params.m_change_fee);
         (void)result_srd->GetShuffledInputVector();
         (void)result_srd->GetInputSet();
     }
@@ -279,7 +279,7 @@ FUZZ_TARGET(coinselection)
     auto result_knapsack = KnapsackSolver(group_all, target, change_target, fast_random_context, MAX_STANDARD_TX_WEIGHT);
     if (result_knapsack) {
         assert(result_knapsack->GetSelectedValue() >= target);
-        result_knapsack->ComputeAndSetWaste(coin_params.min_viable_change, coin_params.m_cost_of_change, coin_params.m_change_fee);
+        result_knapsack->RecalculateWaste(coin_params.min_viable_change, coin_params.m_cost_of_change, coin_params.m_change_fee);
         (void)result_knapsack->GetShuffledInputVector();
         (void)result_knapsack->GetInputSet();
     }
@@ -291,7 +291,10 @@ FUZZ_TARGET(coinselection)
     }
 
     std::vector<COutput> utxos;
-    std::vector<util::Result<SelectionResult>> results{result_srd, result_knapsack, result_bnb};
+    std::vector<util::Result<SelectionResult>> results;
+    results.emplace_back(std::move(result_srd));
+    results.emplace_back(std::move(result_knapsack));
+    results.emplace_back(std::move(result_bnb));
     CAmount new_total_balance{CreateCoins(fuzzed_data_provider, utxos, coin_params, next_locktime)};
     if (new_total_balance > 0) {
         std::set<std::shared_ptr<COutput>> new_utxo_pool;
