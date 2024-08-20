@@ -6,8 +6,6 @@
 
 #include <test/util/setup_common.h>
 
-#include <kernel/validation_cache_sizes.h>
-
 #include <addrman.h>
 #include <banman.h>
 #include <chainparams.h>
@@ -30,7 +28,6 @@
 #include <node/mempool_args.h>
 #include <node/miner.h>
 #include <node/peerman_args.h>
-#include <node/validation_cache_args.h>
 #include <node/warnings.h>
 #include <noui.h>
 #include <policy/fees.h>
@@ -68,7 +65,6 @@
 #include <stdexcept>
 
 using kernel::BlockTreeDB;
-using kernel::ValidationCacheSizes;
 using node::ApplyArgsManOptions;
 using node::BlockAssembler;
 using node::BlockManager;
@@ -82,6 +78,18 @@ const std::function<std::string(const char*)> G_TRANSLATION_FUN = nullptr;
 
 /** Random context to get unique temp data dirs. Separate from g_insecure_rand_ctx, which can be seeded from a const env var */
 static FastRandomContext g_insecure_rand_ctx_temp_path;
+
+std::ostream& operator<<(std::ostream& os, const arith_uint256& num)
+{
+    os << num.ToString();
+    return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const uint160& num)
+{
+    os << num.ToString();
+    return os;
+}
 
 std::ostream& operator<<(std::ostream& os, const uint256& num)
 {
@@ -112,7 +120,7 @@ static void ExitFailure(std::string_view str_err)
     exit(EXIT_FAILURE);
 }
 
-BasicTestingSetup::BasicTestingSetup(const ChainType chainType, const std::vector<const char*>& extra_args)
+BasicTestingSetup::BasicTestingSetup(const ChainType chainType, TestOpts opts)
     : m_args{}
 {
     m_node.shutdown = &m_interrupt;
@@ -129,7 +137,7 @@ BasicTestingSetup::BasicTestingSetup(const ChainType chainType, const std::vecto
             "-debugexclude=libevent",
             "-debugexclude=leveldb",
         },
-        extra_args);
+        opts.extra_args);
     if (G_TEST_COMMAND_LINE_ARGUMENTS) {
         arguments = Cat(arguments, G_TEST_COMMAND_LINE_ARGUMENTS());
     }
@@ -144,6 +152,10 @@ BasicTestingSetup::BasicTestingSetup(const ChainType chainType, const std::vecto
             throw std::runtime_error{error};
         }
     }
+
+    // Use randomly chosen seed for deterministic PRNG, so that (by default) test
+    // data directories use a random name that doesn't overlap with other tests.
+    SeedRandomForTest(SeedRand::SEED);
 
     if (!m_node.args->IsArgSet("-testdatadir")) {
         // By default, the data directory has a random name
@@ -178,7 +190,6 @@ BasicTestingSetup::BasicTestingSetup(const ChainType chainType, const std::vecto
     gArgs.ForceSetArg("-datadir", fs::PathToString(m_path_root));
 
     SelectParams(chainType);
-    SeedInsecureRand();
     if (G_TEST_LOG_FUN) LogInstance().PushBackCallback(G_TEST_LOG_FUN);
     InitLogging(*m_node.args);
     AppInitParameterInteraction(*m_node.args);
@@ -187,11 +198,6 @@ BasicTestingSetup::BasicTestingSetup(const ChainType chainType, const std::vecto
     m_node.kernel = std::make_unique<kernel::Context>();
     m_node.ecc_context = std::make_unique<ECC_Context>();
     SetupEnvironment();
-
-    ValidationCacheSizes validation_cache_sizes{};
-    ApplyArgsManOptions(*m_node.args, validation_cache_sizes);
-    Assert(InitSignatureCache(validation_cache_sizes.signature_cache_bytes));
-    Assert(InitScriptExecutionCache(validation_cache_sizes.script_execution_cache_bytes));
 
     m_node.chain = interfaces::MakeChain(m_node);
     static bool noui_connected = false;
@@ -217,16 +223,18 @@ BasicTestingSetup::~BasicTestingSetup()
     gArgs.ClearArgs();
 }
 
-ChainTestingSetup::ChainTestingSetup(const ChainType chainType, const std::vector<const char*>& extra_args)
-    : BasicTestingSetup(chainType, extra_args)
+ChainTestingSetup::ChainTestingSetup(const ChainType chainType, TestOpts opts)
+    : BasicTestingSetup(chainType, opts)
 {
     const CChainParams& chainparams = Params();
 
     // We have to run a scheduler thread to prevent ActivateBestChain
     // from blocking due to queue overrun.
-    m_node.scheduler = std::make_unique<CScheduler>();
-    m_node.scheduler->m_service_thread = std::thread(util::TraceThread, "scheduler", [&] { m_node.scheduler->serviceQueue(); });
-    m_node.validation_signals = std::make_unique<ValidationSignals>(std::make_unique<SerialTaskRunner>(*m_node.scheduler));
+    if (opts.setup_validation_interface) {
+        m_node.scheduler = std::make_unique<CScheduler>();
+        m_node.scheduler->m_service_thread = std::thread(util::TraceThread, "scheduler", [&] { m_node.scheduler->serviceQueue(); });
+        m_node.validation_signals = std::make_unique<ValidationSignals>(std::make_unique<SerialTaskRunner>(*m_node.scheduler));
+    }
 
     m_node.fee_estimator = std::make_unique<CBlockPolicyEstimator>(FeeestPath(*m_node.args), DEFAULT_ACCEPT_STALE_FEE_ESTIMATES);
     bilingual_str error{};
@@ -261,7 +269,7 @@ ChainTestingSetup::ChainTestingSetup(const ChainType chainType, const std::vecto
 ChainTestingSetup::~ChainTestingSetup()
 {
     if (m_node.scheduler) m_node.scheduler->stop();
-    m_node.validation_signals->FlushBackgroundCallbacks();
+    if (m_node.validation_signals) m_node.validation_signals->FlushBackgroundCallbacks();
     m_node.connman.reset();
     m_node.banman.reset();
     m_node.addrman.reset();
@@ -301,18 +309,18 @@ void ChainTestingSetup::LoadVerifyActivateChainstate()
 
 TestingSetup::TestingSetup(
     const ChainType chainType,
-    const std::vector<const char*>& extra_args,
-    const bool coins_db_in_memory,
-    const bool block_tree_db_in_memory)
-    : ChainTestingSetup(chainType, extra_args)
+    TestOpts opts)
+    : ChainTestingSetup(chainType, opts)
 {
-    m_coins_db_in_memory = coins_db_in_memory;
-    m_block_tree_db_in_memory = block_tree_db_in_memory;
+    m_coins_db_in_memory = opts.coins_db_in_memory;
+    m_block_tree_db_in_memory = opts.block_tree_db_in_memory;
     // Ideally we'd move all the RPC tests to the functional testing framework
     // instead of unit tests, but for now we need these here.
     RegisterAllCoreRPCCommands(tableRPC);
 
     LoadVerifyActivateChainstate();
+
+    if (!opts.setup_net) return;
 
     m_node.netgroupman = std::make_unique<NetGroupManager>(/*asmap=*/std::vector<bool>());
     m_node.addrman = std::make_unique<AddrMan>(*m_node.netgroupman,
@@ -336,11 +344,9 @@ TestingSetup::TestingSetup(
 }
 
 TestChain100Setup::TestChain100Setup(
-        const ChainType chain_type,
-        const std::vector<const char*>& extra_args,
-        const bool coins_db_in_memory,
-        const bool block_tree_db_in_memory)
-    : TestingSetup{ChainType::REGTEST, extra_args, coins_db_in_memory, block_tree_db_in_memory}
+    const ChainType chain_type,
+    TestOpts opts)
+    : TestingSetup{ChainType::REGTEST, opts}
 {
     SetMockTime(1598887952);
     constexpr std::array<unsigned char, 32> vchKey = {
@@ -374,7 +380,8 @@ CBlock TestChain100Setup::CreateBlock(
     const CScript& scriptPubKey,
     Chainstate& chainstate)
 {
-    CBlock block = BlockAssembler{chainstate, nullptr}.CreateNewBlock(scriptPubKey)->block;
+    BlockAssembler::Options options;
+    CBlock block = BlockAssembler{chainstate, nullptr, options}.CreateNewBlock(scriptPubKey)->block;
 
     Assert(block.vtx.size() == 1);
     for (const CMutableTransaction& tx : txns) {

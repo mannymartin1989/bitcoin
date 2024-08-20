@@ -19,7 +19,7 @@
 #include <pow.h>
 #include <primitives/block.h>
 #include <primitives/transaction.h>
-#include <reverse_iterator.h>
+#include <random.h>
 #include <serialize.h>
 #include <signet.h>
 #include <span.h>
@@ -37,6 +37,7 @@
 #include <validation.h>
 
 #include <map>
+#include <ranges>
 #include <unordered_map>
 
 namespace kernel {
@@ -410,11 +411,11 @@ bool BlockManager::LoadBlockIndex(const std::optional<uint256>& snapshot_blockha
         m_snapshot_height = au_data.height;
         CBlockIndex* base{LookupBlockIndex(*snapshot_blockhash)};
 
-        // Since nChainTx (responsible for estimated progress) isn't persisted
+        // Since m_chain_tx_count (responsible for estimated progress) isn't persisted
         // to disk, we must bootstrap the value for assumedvalid chainstates
         // from the hardcoded assumeutxo chainparams.
-        base->nChainTx = au_data.nChainTx;
-        LogPrintf("[snapshot] set nChainTx=%d for %s\n", au_data.nChainTx, snapshot_blockhash->ToString());
+        base->m_chain_tx_count = au_data.m_chain_tx_count;
+        LogPrintf("[snapshot] set m_chain_tx_count=%d for %s\n", au_data.m_chain_tx_count, snapshot_blockhash->ToString());
     } else {
         // If this isn't called with a snapshot blockhash, make sure the cached snapshot height
         // is null. This is relevant during snapshot completion, when the blockman may be loaded
@@ -449,15 +450,15 @@ bool BlockManager::LoadBlockIndex(const std::optional<uint256>& snapshot_blockha
                 if (m_snapshot_height && pindex->nHeight == *m_snapshot_height &&
                         pindex->GetBlockHash() == *snapshot_blockhash) {
                     // Should have been set above; don't disturb it with code below.
-                    Assert(pindex->nChainTx > 0);
-                } else if (pindex->pprev->nChainTx > 0) {
-                    pindex->nChainTx = pindex->pprev->nChainTx + pindex->nTx;
+                    Assert(pindex->m_chain_tx_count > 0);
+                } else if (pindex->pprev->m_chain_tx_count > 0) {
+                    pindex->m_chain_tx_count = pindex->pprev->m_chain_tx_count + pindex->nTx;
                 } else {
-                    pindex->nChainTx = 0;
+                    pindex->m_chain_tx_count = 0;
                     m_blocks_unlinked.insert(std::make_pair(pindex->pprev, pindex));
                 }
             } else {
-                pindex->nChainTx = pindex->nTx;
+                pindex->m_chain_tx_count = pindex->nTx;
             }
         }
         if (!(pindex->nStatus & BLOCK_FAILED_MASK) && pindex->pprev && (pindex->pprev->nStatus & BLOCK_FAILED_MASK)) {
@@ -578,7 +579,7 @@ const CBlockIndex* BlockManager::GetLastCheckpoint(const CCheckpointData& data)
 {
     const MapCheckpoints& checkpoints = data.mapCheckpoints;
 
-    for (const MapCheckpoints::value_type& i : reverse_iterate(checkpoints)) {
+    for (const MapCheckpoints::value_type& i : checkpoints | std::views::reverse) {
         const uint256& hash = i.second;
         const CBlockIndex* pindex = LookupBlockIndex(hash);
         if (pindex) {
@@ -588,18 +589,18 @@ const CBlockIndex* BlockManager::GetLastCheckpoint(const CCheckpointData& data)
     return nullptr;
 }
 
-bool BlockManager::IsBlockPruned(const CBlockIndex& block)
+bool BlockManager::IsBlockPruned(const CBlockIndex& block) const
 {
     AssertLockHeld(::cs_main);
     return m_have_pruned && !(block.nStatus & BLOCK_HAVE_DATA) && (block.nTx > 0);
 }
 
-const CBlockIndex* BlockManager::GetFirstStoredBlock(const CBlockIndex& upper_block, const CBlockIndex* lower_block)
+const CBlockIndex* BlockManager::GetFirstBlock(const CBlockIndex& upper_block, uint32_t status_mask, const CBlockIndex* lower_block) const
 {
     AssertLockHeld(::cs_main);
     const CBlockIndex* last_block = &upper_block;
-    assert(last_block->nStatus & BLOCK_HAVE_DATA); // 'upper_block' must have data
-    while (last_block->pprev && (last_block->pprev->nStatus & BLOCK_HAVE_DATA)) {
+    assert((last_block->nStatus & status_mask) == status_mask); // 'upper_block' must satisfy the status mask
+    while (last_block->pprev && ((last_block->pprev->nStatus & status_mask) == status_mask)) {
         if (lower_block) {
             // Return if we reached the lower_block
             if (last_block == lower_block) return lower_block;
@@ -616,7 +617,7 @@ const CBlockIndex* BlockManager::GetFirstStoredBlock(const CBlockIndex& upper_bl
 bool BlockManager::CheckBlockDataAvailability(const CBlockIndex& upper_block, const CBlockIndex& lower_block)
 {
     if (!(upper_block.nStatus & BLOCK_HAVE_DATA)) return false;
-    return GetFirstStoredBlock(upper_block, &lower_block) == &lower_block;
+    return GetFirstBlock(upper_block, BLOCK_HAVE_DATA, &lower_block) == &lower_block;
 }
 
 // If we're using -prune with -reindex, then delete block files that will be ignored by the
@@ -703,15 +704,10 @@ bool BlockManager::UndoReadFromDisk(CBlockUndo& blockundo, const CBlockIndex& in
 {
     const FlatFilePos pos{WITH_LOCK(::cs_main, return index.GetUndoPos())};
 
-    if (pos.IsNull()) {
-        LogError("%s: no undo data available\n", __func__);
-        return false;
-    }
-
     // Open history file to read
     AutoFile filein{OpenUndoFile(pos, true)};
     if (filein.IsNull()) {
-        LogError("%s: OpenUndoFile failed\n", __func__);
+        LogError("%s: OpenUndoFile failed for %s\n", __func__, pos.ToString());
         return false;
     }
 
@@ -723,13 +719,13 @@ bool BlockManager::UndoReadFromDisk(CBlockUndo& blockundo, const CBlockIndex& in
         verifier >> blockundo;
         filein >> hashChecksum;
     } catch (const std::exception& e) {
-        LogError("%s: Deserialize or I/O error - %s\n", __func__, e.what());
+        LogError("%s: Deserialize or I/O error - %s at %s\n", __func__, e.what(), pos.ToString());
         return false;
     }
 
     // Verify checksum
     if (hashChecksum != verifier.GetHash()) {
-        LogError("%s: Checksum mismatch\n", __func__);
+        LogError("%s: Checksum mismatch at %s\n", __func__, pos.ToString());
         return false;
     }
 
@@ -739,7 +735,7 @@ bool BlockManager::UndoReadFromDisk(CBlockUndo& blockundo, const CBlockIndex& in
 bool BlockManager::FlushUndoFile(int block_file, bool finalize)
 {
     FlatFilePos undo_pos_old(block_file, m_blockfile_info[block_file].nUndoSize);
-    if (!UndoFileSeq().Flush(undo_pos_old, finalize)) {
+    if (!m_undo_file_seq.Flush(undo_pos_old, finalize)) {
         m_opts.notifications.flushError(_("Flushing undo file to disk failed. This is likely the result of an I/O error."));
         return false;
     }
@@ -761,7 +757,7 @@ bool BlockManager::FlushBlockFile(int blockfile_num, bool fFinalize, bool finali
     assert(static_cast<int>(m_blockfile_info.size()) > blockfile_num);
 
     FlatFilePos block_pos_old(blockfile_num, m_blockfile_info[blockfile_num].nSize);
-    if (!BlockFileSeq().Flush(block_pos_old, fFinalize)) {
+    if (!m_block_file_seq.Flush(block_pos_old, fFinalize)) {
         m_opts.notifications.flushError(_("Flushing block file to disk failed. This is likely the result of an I/O error."));
         success = false;
     }
@@ -813,38 +809,28 @@ void BlockManager::UnlinkPrunedFiles(const std::set<int>& setFilesToPrune) const
     std::error_code ec;
     for (std::set<int>::iterator it = setFilesToPrune.begin(); it != setFilesToPrune.end(); ++it) {
         FlatFilePos pos(*it, 0);
-        const bool removed_blockfile{fs::remove(BlockFileSeq().FileName(pos), ec)};
-        const bool removed_undofile{fs::remove(UndoFileSeq().FileName(pos), ec)};
+        const bool removed_blockfile{fs::remove(m_block_file_seq.FileName(pos), ec)};
+        const bool removed_undofile{fs::remove(m_undo_file_seq.FileName(pos), ec)};
         if (removed_blockfile || removed_undofile) {
             LogPrint(BCLog::BLOCKSTORAGE, "Prune: %s deleted blk/rev (%05u)\n", __func__, *it);
         }
     }
 }
 
-FlatFileSeq BlockManager::BlockFileSeq() const
-{
-    return FlatFileSeq(m_opts.blocks_dir, "blk", m_opts.fast_prune ? 0x4000 /* 16kb */ : BLOCKFILE_CHUNK_SIZE);
-}
-
-FlatFileSeq BlockManager::UndoFileSeq() const
-{
-    return FlatFileSeq(m_opts.blocks_dir, "rev", UNDOFILE_CHUNK_SIZE);
-}
-
 AutoFile BlockManager::OpenBlockFile(const FlatFilePos& pos, bool fReadOnly) const
 {
-    return AutoFile{BlockFileSeq().Open(pos, fReadOnly)};
+    return AutoFile{m_block_file_seq.Open(pos, fReadOnly), m_xor_key};
 }
 
 /** Open an undo file (rev?????.dat) */
 AutoFile BlockManager::OpenUndoFile(const FlatFilePos& pos, bool fReadOnly) const
 {
-    return AutoFile{UndoFileSeq().Open(pos, fReadOnly)};
+    return AutoFile{m_undo_file_seq.Open(pos, fReadOnly), m_xor_key};
 }
 
 fs::path BlockManager::GetBlockPosFilename(const FlatFilePos& pos) const
 {
-    return BlockFileSeq().FileName(pos);
+    return m_block_file_seq.FileName(pos);
 }
 
 FlatFilePos BlockManager::FindNextBlockPos(unsigned int nAddSize, unsigned int nHeight, uint64_t nTime)
@@ -924,7 +910,7 @@ FlatFilePos BlockManager::FindNextBlockPos(unsigned int nAddSize, unsigned int n
     m_blockfile_info[nFile].nSize += nAddSize;
 
     bool out_of_space;
-    size_t bytes_allocated = BlockFileSeq().Allocate(pos, nAddSize, out_of_space);
+    size_t bytes_allocated = m_block_file_seq.Allocate(pos, nAddSize, out_of_space);
     if (out_of_space) {
         m_opts.notifications.fatalError(_("Disk space is too low!"));
         return {};
@@ -970,7 +956,7 @@ bool BlockManager::FindUndoPos(BlockValidationState& state, int nFile, FlatFileP
     m_dirty_fileinfo.insert(nFile);
 
     bool out_of_space;
-    size_t bytes_allocated = UndoFileSeq().Allocate(pos, nAddSize, out_of_space);
+    size_t bytes_allocated = m_undo_file_seq.Allocate(pos, nAddSize, out_of_space);
     if (out_of_space) {
         return FatalError(m_opts.notifications, state, _("Disk space is too low!"));
     }
@@ -986,7 +972,7 @@ bool BlockManager::WriteBlockToDisk(const CBlock& block, FlatFilePos& pos) const
     // Open history file to append
     AutoFile fileout{OpenBlockFile(pos)};
     if (fileout.IsNull()) {
-        LogError("WriteBlockToDisk: OpenBlockFile failed\n");
+        LogError("%s: OpenBlockFile failed\n", __func__);
         return false;
     }
 
@@ -997,7 +983,7 @@ bool BlockManager::WriteBlockToDisk(const CBlock& block, FlatFilePos& pos) const
     // Write block
     long fileOutPos = ftell(fileout.Get());
     if (fileOutPos < 0) {
-        LogError("WriteBlockToDisk: ftell failed\n");
+        LogError("%s: ftell failed\n", __func__);
         return false;
     }
     pos.nPos = (unsigned int)fileOutPos;
@@ -1016,7 +1002,7 @@ bool BlockManager::WriteUndoDataForBlock(const CBlockUndo& blockundo, BlockValid
     if (block.GetUndoPos().IsNull()) {
         FlatFilePos _pos;
         if (!FindUndoPos(state, block.nFile, _pos, ::GetSerializeSize(blockundo) + 40)) {
-            LogError("ConnectBlock(): FindUndoPos failed\n");
+            LogError("%s: FindUndoPos failed\n", __func__);
             return false;
         }
         if (!UndoWriteToDisk(blockundo, _pos, block.pprev->GetBlockHash())) {
@@ -1055,7 +1041,7 @@ bool BlockManager::ReadBlockFromDisk(CBlock& block, const FlatFilePos& pos) cons
     // Open history file to read
     AutoFile filein{OpenBlockFile(pos, true)};
     if (filein.IsNull()) {
-        LogError("ReadBlockFromDisk: OpenBlockFile failed for %s\n", pos.ToString());
+        LogError("%s: OpenBlockFile failed for %s\n", __func__, pos.ToString());
         return false;
     }
 
@@ -1069,13 +1055,13 @@ bool BlockManager::ReadBlockFromDisk(CBlock& block, const FlatFilePos& pos) cons
 
     // Check the header
     if (!CheckProofOfWork(block.GetHash(), block.nBits, GetConsensus())) {
-        LogError("ReadBlockFromDisk: Errors in block header at %s\n", pos.ToString());
+        LogError("%s: Errors in block header at %s\n", __func__, pos.ToString());
         return false;
     }
 
     // Signet only: check block solution
     if (GetConsensus().signet_blocks && !CheckSignetBlockSolution(block, GetConsensus())) {
-        LogError("ReadBlockFromDisk: Errors in block solution at %s\n", pos.ToString());
+        LogError("%s: Errors in block solution at %s\n", __func__, pos.ToString());
         return false;
     }
 
@@ -1090,8 +1076,7 @@ bool BlockManager::ReadBlockFromDisk(CBlock& block, const CBlockIndex& index) co
         return false;
     }
     if (block.GetHash() != index.GetBlockHash()) {
-        LogError("ReadBlockFromDisk(CBlock&, CBlockIndex*): GetHash() doesn't match index for %s at %s\n",
-                     index.ToString(), block_pos.ToString());
+        LogError("%s: GetHash() doesn't match index for %s at %s\n", __func__, index.ToString(), block_pos.ToString());
         return false;
     }
     return true;
@@ -1159,6 +1144,54 @@ FlatFilePos BlockManager::SaveBlockToDisk(const CBlock& block, int nHeight)
     }
     return blockPos;
 }
+
+static auto InitBlocksdirXorKey(const BlockManager::Options& opts)
+{
+    // Bytes are serialized without length indicator, so this is also the exact
+    // size of the XOR-key file.
+    std::array<std::byte, 8> xor_key{};
+
+    if (opts.use_xor && fs::is_empty(opts.blocks_dir)) {
+        // Only use random fresh key when the boolean option is set and on the
+        // very first start of the program.
+        FastRandomContext{}.fillrand(xor_key);
+    }
+
+    const fs::path xor_key_path{opts.blocks_dir / "xor.dat"};
+    if (fs::exists(xor_key_path)) {
+        // A pre-existing xor key file has priority.
+        AutoFile xor_key_file{fsbridge::fopen(xor_key_path, "rb")};
+        xor_key_file >> xor_key;
+    } else {
+        // Create initial or missing xor key file
+        AutoFile xor_key_file{fsbridge::fopen(xor_key_path,
+#ifdef __MINGW64__
+            "wb" // Temporary workaround for https://github.com/bitcoin/bitcoin/issues/30210
+#else
+            "wbx"
+#endif
+        )};
+        xor_key_file << xor_key;
+    }
+    // If the user disabled the key, it must be zero.
+    if (!opts.use_xor && xor_key != decltype(xor_key){}) {
+        throw std::runtime_error{
+            strprintf("The blocksdir XOR-key can not be disabled when a random key was already stored! "
+                      "Stored key: '%s', stored path: '%s'.",
+                      HexStr(xor_key), fs::PathToString(xor_key_path)),
+        };
+    }
+    LogInfo("Using obfuscation key for blocksdir *.dat files (%s): '%s'\n", fs::PathToString(opts.blocks_dir), HexStr(xor_key));
+    return std::vector<std::byte>{xor_key.begin(), xor_key.end()};
+}
+
+BlockManager::BlockManager(const util::SignalInterrupt& interrupt, Options opts)
+    : m_prune_mode{opts.prune_target > 0},
+      m_xor_key{InitBlocksdirXorKey(opts)},
+      m_opts{std::move(opts)},
+      m_block_file_seq{FlatFileSeq{m_opts.blocks_dir, "blk", m_opts.fast_prune ? 0x4000 /* 16kB */ : BLOCKFILE_CHUNK_SIZE}},
+      m_undo_file_seq{FlatFileSeq{m_opts.blocks_dir, "rev", UNDOFILE_CHUNK_SIZE}},
+      m_interrupt{interrupt} {}
 
 class ImportingNow
 {

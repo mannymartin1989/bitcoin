@@ -1277,6 +1277,19 @@ BOOST_AUTO_TEST_CASE(sign_invalid_miniscript)
     BOOST_CHECK(!SignSignature(keystore, CTransaction(prev), curr, 0, SIGHASH_ALL, sig_data));
 }
 
+/* P2A input should be considered signed. */
+BOOST_AUTO_TEST_CASE(sign_paytoanchor)
+{
+    FillableSigningProvider keystore;
+    SignatureData sig_data;
+    CMutableTransaction prev, curr;
+    prev.vout.emplace_back(0, GetScriptForDestination(PayToAnchor{}));
+
+    curr.vin.emplace_back(COutPoint{prev.GetHash(), 0});
+
+    BOOST_CHECK(SignSignature(keystore, CTransaction(prev), curr, 0, SIGHASH_ALL, sig_data));
+}
+
 BOOST_AUTO_TEST_CASE(script_standard_push)
 {
     ScriptError err;
@@ -1526,7 +1539,7 @@ static std::vector<unsigned int> AllConsensusFlags()
 /** Precomputed list of all valid combinations of consensus-relevant script validation flags. */
 static const std::vector<unsigned int> ALL_CONSENSUS_FLAGS = AllConsensusFlags();
 
-static void AssetTest(const UniValue& test)
+static void AssetTest(const UniValue& test, SignatureCache& signature_cache)
 {
     BOOST_CHECK(test.isObject());
 
@@ -1543,7 +1556,7 @@ static void AssetTest(const UniValue& test)
         CTransaction tx(mtx);
         PrecomputedTransactionData txdata;
         txdata.Init(tx, std::vector<CTxOut>(prevouts));
-        CachingTransactionSignatureChecker txcheck(&tx, idx, prevouts[idx].nValue, true, txdata);
+        CachingTransactionSignatureChecker txcheck(&tx, idx, prevouts[idx].nValue, true, signature_cache, txdata);
 
         for (const auto flags : ALL_CONSENSUS_FLAGS) {
             // "final": true tests are valid for all flags. Others are only valid with flags that are
@@ -1561,7 +1574,7 @@ static void AssetTest(const UniValue& test)
         CTransaction tx(mtx);
         PrecomputedTransactionData txdata;
         txdata.Init(tx, std::vector<CTxOut>(prevouts));
-        CachingTransactionSignatureChecker txcheck(&tx, idx, prevouts[idx].nValue, true, txdata);
+        CachingTransactionSignatureChecker txcheck(&tx, idx, prevouts[idx].nValue, true, signature_cache, txdata);
 
         for (const auto flags : ALL_CONSENSUS_FLAGS) {
             // If a test is supposed to fail with test_flags, it should also fail with any superset thereof.
@@ -1577,6 +1590,7 @@ BOOST_AUTO_TEST_CASE(script_assets_test)
 {
     // See src/test/fuzz/script_assets_test_minimizer.cpp for information on how to generate
     // the script_assets_test.json file used by this test.
+    SignatureCache signature_cache{DEFAULT_SIGNATURE_CACHE_BYTES};
 
     const char* dir = std::getenv("DIR_UNIT_TEST_DATA");
     BOOST_WARN_MESSAGE(dir != nullptr, "Variable DIR_UNIT_TEST_DATA unset, skipping script_assets_test");
@@ -1597,7 +1611,7 @@ BOOST_AUTO_TEST_CASE(script_assets_test)
     BOOST_CHECK(tests.size() > 0);
 
     for (size_t i = 0; i < tests.size(); i++) {
-        AssetTest(tests[i]);
+        AssetTest(tests[i], signature_cache);
     }
     file.close();
 }
@@ -1678,17 +1692,17 @@ BOOST_AUTO_TEST_CASE(bip341_keypath_test_vectors)
 
 BOOST_AUTO_TEST_CASE(compute_tapbranch)
 {
-    uint256 hash1 = uint256S("8ad69ec7cf41c2a4001fd1f738bf1e505ce2277acdcaa63fe4765192497f47a7");
-    uint256 hash2 = uint256S("f224a923cd0021ab202ab139cc56802ddb92dcfc172b9212261a539df79a112a");
-    uint256 result = uint256S("a64c5b7b943315f9b805d7a7296bedfcfd08919270a1f7a1466e98f8693d8cd9");
+    constexpr uint256 hash1{"8ad69ec7cf41c2a4001fd1f738bf1e505ce2277acdcaa63fe4765192497f47a7"};
+    constexpr uint256 hash2{"f224a923cd0021ab202ab139cc56802ddb92dcfc172b9212261a539df79a112a"};
+    constexpr uint256 result{"a64c5b7b943315f9b805d7a7296bedfcfd08919270a1f7a1466e98f8693d8cd9"};
     BOOST_CHECK_EQUAL(ComputeTapbranchHash(hash1, hash2), result);
 }
 
 BOOST_AUTO_TEST_CASE(compute_tapleaf)
 {
-    const uint8_t script[6] = {'f','o','o','b','a','r'};
-    uint256 tlc0 = uint256S("edbc10c272a1215dcdcc11d605b9027b5ad6ed97cd45521203f136767b5b9c06");
-    uint256 tlc2 = uint256S("8b5c4f90ae6bf76e259dbef5d8a59df06359c391b59263741b25eca76451b27a");
+    constexpr uint8_t script[6] = {'f','o','o','b','a','r'};
+    constexpr uint256 tlc0{"edbc10c272a1215dcdcc11d605b9027b5ad6ed97cd45521203f136767b5b9c06"};
+    constexpr uint256 tlc2{"8b5c4f90ae6bf76e259dbef5d8a59df06359c391b59263741b25eca76451b27a"};
 
     BOOST_CHECK_EQUAL(ComputeTapleafHash(0xc0, Span(script)), tlc0);
     BOOST_CHECK_EQUAL(ComputeTapleafHash(0xc2, Span(script)), tlc2);

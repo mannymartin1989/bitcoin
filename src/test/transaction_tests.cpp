@@ -17,6 +17,7 @@
 #include <policy/settings.h>
 #include <script/script.h>
 #include <script/script_error.h>
+#include <script/sigcache.h>
 #include <script/sign.h>
 #include <script/signingprovider.h>
 #include <script/solver.h>
@@ -222,7 +223,7 @@ BOOST_AUTO_TEST_CASE(tx_valid)
                     fValid = false;
                     break;
                 }
-                COutPoint outpoint{TxidFromString(vinput[0].get_str()), uint32_t(vinput[1].getInt<int>())};
+                COutPoint outpoint{Txid::FromHex(vinput[0].get_str()).value(), uint32_t(vinput[1].getInt<int>())};
                 mapprevOutScriptPubKeys[outpoint] = ParseScript(vinput[2].get_str());
                 if (vinput.size() >= 4)
                 {
@@ -310,7 +311,7 @@ BOOST_AUTO_TEST_CASE(tx_invalid)
                     fValid = false;
                     break;
                 }
-                COutPoint outpoint{TxidFromString(vinput[0].get_str()), uint32_t(vinput[1].getInt<int>())};
+                COutPoint outpoint{Txid::FromHex(vinput[0].get_str()).value(), uint32_t(vinput[1].getInt<int>())};
                 mapprevOutScriptPubKeys[outpoint] = ParseScript(vinput[2].get_str());
                 if (vinput.size() >= 4)
                 {
@@ -541,7 +542,7 @@ BOOST_AUTO_TEST_CASE(test_big_witness_transaction)
     // create a big transaction of 4500 inputs signed by the same key
     for(uint32_t ij = 0; ij < 4500; ij++) {
         uint32_t i = mtx.vin.size();
-        COutPoint outpoint(TxidFromString("0000000000000000000000000000000000000000000000000000000000000100"), i);
+        COutPoint outpoint(Txid::FromHex("0000000000000000000000000000000000000000000000000000000000000100").value(), i);
 
         mtx.vin.resize(mtx.vin.size() + 1);
         mtx.vin[i].prevout = outpoint;
@@ -578,9 +579,11 @@ BOOST_AUTO_TEST_CASE(test_big_witness_transaction)
         coins.emplace_back(std::move(coin));
     }
 
+    SignatureCache signature_cache{DEFAULT_SIGNATURE_CACHE_BYTES};
+
     for(uint32_t i = 0; i < mtx.vin.size(); i++) {
         std::vector<CScriptCheck> vChecks;
-        vChecks.emplace_back(coins[tx.vin[i].prevout.n].out, tx, i, SCRIPT_VERIFY_P2SH | SCRIPT_VERIFY_WITNESS, false, &txdata);
+        vChecks.emplace_back(coins[tx.vin[i].prevout.n].out, tx, signature_cache, i, SCRIPT_VERIFY_P2SH | SCRIPT_VERIFY_WITNESS, false, &txdata);
         control.Add(std::move(vChecks));
     }
 
@@ -1023,6 +1026,14 @@ BOOST_AUTO_TEST_CASE(test_IsStandard)
         t.vout[0].nValue = 239;
         CheckIsNotStandard(t, "dust");
     }
+
+    // Check anchor outputs
+    t.vout[0].scriptPubKey = CScript() << OP_1 << std::vector<unsigned char>{0x4e, 0x73};
+    BOOST_CHECK(t.vout[0].scriptPubKey.IsPayToAnchor());
+    t.vout[0].nValue = 240;
+    CheckIsStandard(t);
+    t.vout[0].nValue = 239;
+    CheckIsNotStandard(t, "dust");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

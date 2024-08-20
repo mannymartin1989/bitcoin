@@ -83,7 +83,9 @@ BITCOIN_TESTS =\
   test/bloom_tests.cpp \
   test/bswap_tests.cpp \
   test/checkqueue_tests.cpp \
+  test/cluster_linearize_tests.cpp \
   test/coins_tests.cpp \
+  test/coinscachepair_tests.cpp \
   test/coinstatsindex_tests.cpp \
   test/common_url_tests.cpp \
   test/compilerbug_tests.cpp \
@@ -173,8 +175,7 @@ BITCOIN_TESTS =\
   test/validation_flush_tests.cpp \
   test/validation_tests.cpp \
   test/validationinterface_tests.cpp \
-  test/versionbits_tests.cpp \
-  test/xoroshiro128plusplus_tests.cpp
+  test/versionbits_tests.cpp
 
 if ENABLE_WALLET
 BITCOIN_TESTS += \
@@ -298,11 +299,13 @@ test_fuzz_fuzz_SOURCES = \
  test/fuzz/bitset.cpp \
  test/fuzz/block.cpp \
  test/fuzz/block_header.cpp \
+ test/fuzz/block_index.cpp \
  test/fuzz/blockfilter.cpp \
  test/fuzz/bloom_filter.cpp \
  test/fuzz/buffered_file.cpp \
  test/fuzz/chain.cpp \
  test/fuzz/checkqueue.cpp \
+ test/fuzz/cluster_linearize.cpp \
  test/fuzz/coins_view.cpp \
  test/fuzz/coinscache_sim.cpp \
  test/fuzz/connman.cpp \
@@ -310,6 +313,7 @@ test_fuzz_fuzz_SOURCES = \
  test/fuzz/crypto_aes256.cpp \
  test/fuzz/crypto_aes256cbc.cpp \
  test/fuzz/crypto_chacha20.cpp \
+ test/fuzz/crypto_chacha20poly1305.cpp \
  test/fuzz/crypto_common.cpp \
  test/fuzz/crypto_diff_fuzz_chacha20.cpp \
  test/fuzz/crypto_hkdf_hmac_sha256_l32.cpp \
@@ -348,6 +352,7 @@ test_fuzz_fuzz_SOURCES = \
  test/fuzz/netaddress.cpp \
  test/fuzz/netbase_dns_lookup.cpp \
  test/fuzz/node_eviction.cpp \
+ test/fuzz/p2p_handshake.cpp \
  test/fuzz/p2p_transport_serialization.cpp \
  test/fuzz/package_eval.cpp \
  test/fuzz/parse_hd_keypath.cpp \

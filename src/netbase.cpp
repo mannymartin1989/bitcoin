@@ -23,7 +23,7 @@
 #include <limits>
 #include <memory>
 
-#if HAVE_SOCKADDR_UN
+#ifdef HAVE_SOCKADDR_UN
 #include <sys/un.h>
 #endif
 
@@ -50,6 +50,7 @@ std::vector<CNetAddr> WrappedGetAddrInfo(const std::string& name, bool allow_loo
     ai_hint.ai_protocol = IPPROTO_TCP;
     // We don't care which address family (IPv4 or IPv6) is returned
     ai_hint.ai_family = AF_UNSPEC;
+
     // If we allow lookups of hostnames, use the AI_ADDRCONFIG flag to only
     // return addresses whose family we have an address configured for.
     //
@@ -61,7 +62,17 @@ std::vector<CNetAddr> WrappedGetAddrInfo(const std::string& name, bool allow_loo
     addrinfo* ai_res{nullptr};
     const int n_err{getaddrinfo(name.c_str(), nullptr, &ai_hint, &ai_res)};
     if (n_err != 0) {
-        return {};
+        if ((ai_hint.ai_flags & AI_ADDRCONFIG) == AI_ADDRCONFIG) {
+            // AI_ADDRCONFIG on some systems may exclude loopback-only addresses
+            // If first lookup failed we perform a second lookup without AI_ADDRCONFIG
+            ai_hint.ai_flags = (ai_hint.ai_flags & ~AI_ADDRCONFIG);
+            const int n_err_retry{getaddrinfo(name.c_str(), nullptr, &ai_hint, &ai_res)};
+            if (n_err_retry != 0) {
+                return {};
+            }
+        } else {
+            return {};
+        }
     }
 
     // Traverse the linked list starting with ai_trav.
@@ -218,7 +229,7 @@ CService LookupNumeric(const std::string& name, uint16_t portDefault, DNSLookupF
 
 bool IsUnixSocketPath(const std::string& name)
 {
-#if HAVE_SOCKADDR_UN
+#ifdef HAVE_SOCKADDR_UN
     if (name.find(ADDR_PREFIX_UNIX) != 0) return false;
 
     // Split off "unix:" prefix
@@ -445,7 +456,8 @@ bool Socks5(const std::string& strDest, uint16_t port, const ProxyCredentials* a
         }
         if (pchRet2[1] != SOCKS5Reply::SUCCEEDED) {
             // Failures to connect to a peer that are not proxy errors
-            LogPrintf("Socks5() connect to %s:%d failed: %s\n", strDest, port, Socks5ErrorString(pchRet2[1]));
+            LogPrintLevel(BCLog::NET, BCLog::Level::Debug,
+                          "Socks5() connect to %s:%d failed: %s\n", strDest, port, Socks5ErrorString(pchRet2[1]));
             return false;
         }
         if (pchRet2[2] != 0x00) { // Reserved field must be 0
@@ -527,7 +539,7 @@ std::unique_ptr<Sock> CreateSockOS(int domain, int type, int protocol)
         return nullptr;
     }
 
-#if HAVE_SOCKADDR_UN
+#ifdef HAVE_SOCKADDR_UN
     if (domain == AF_UNIX) return sock;
 #endif
 
@@ -573,7 +585,7 @@ static bool ConnectToSocket(const Sock& sock, struct sockaddr* sockaddr, socklen
                           NetworkErrorString(WSAGetLastError()));
                 return false;
             } else if (occurred == 0) {
-                LogPrint(BCLog::NET, "connection attempt to %s timed out\n", dest_str);
+                LogPrintLevel(BCLog::NET, BCLog::Level::Debug, "connection attempt to %s timed out\n", dest_str);
                 return false;
             }
 
@@ -638,7 +650,7 @@ std::unique_ptr<Sock> Proxy::Connect() const
 
     if (!m_is_unix_socket) return ConnectDirectly(proxy, /*manual_connection=*/true);
 
-#if HAVE_SOCKADDR_UN
+#ifdef HAVE_SOCKADDR_UN
     auto sock = CreateSock(AF_UNIX, SOCK_STREAM, 0);
     if (!sock) {
         LogPrintLevel(BCLog::NET, BCLog::Level::Error, "Cannot create a socket for connecting to %s\n", m_unix_socket_path);

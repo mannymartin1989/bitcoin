@@ -15,11 +15,11 @@
 #include <kernel/chainstatemanager_opts.h>
 #include <kernel/checks.h>
 #include <kernel/context.h>
-#include <kernel/validation_cache_sizes.h>
 #include <kernel/warning.h>
 
 #include <consensus/validation.h>
 #include <core_io.h>
+#include <logging.h>
 #include <node/blockstorage.h>
 #include <node/caches.h>
 #include <node/chainstate.h>
@@ -42,6 +42,12 @@
 
 int main(int argc, char* argv[])
 {
+    // We do not enable logging for this app, so explicitly disable it.
+    // To enable logging instead, replace with:
+    //    LogInstance().m_print_to_console = true;
+    //    LogInstance().StartLogging();
+    LogInstance().DisableLogging();
+
     // SETUP: Argument parsing and handling
     if (argc != 2) {
         std::cerr
@@ -62,13 +68,6 @@ int main(int argc, char* argv[])
     // things instantiated so far requires running the epilogue to be torn down
     // properly
     assert(kernel::SanityChecks(kernel_context));
-
-    // Necessary for CheckInputScripts (eventually called by ProcessNewBlock),
-    // which will try the script cache first and fall back to actually
-    // performing the check with the signature cache.
-    kernel::ValidationCacheSizes validation_cache_sizes{};
-    Assert(InitSignatureCache(validation_cache_sizes.signature_cache_bytes));
-    Assert(InitScriptExecutionCache(validation_cache_sizes.script_execution_cache_bytes));
 
     ValidationSignals validation_signals{std::make_unique<util::ImmediateTaskRunner>()};
 

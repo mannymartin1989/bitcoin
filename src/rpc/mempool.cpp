@@ -5,7 +5,7 @@
 
 #include <rpc/blockchain.h>
 
-#include <kernel/mempool_persist.h>
+#include <node/mempool_persist.h>
 
 #include <chainparams.h>
 #include <core_io.h>
@@ -27,7 +27,7 @@
 
 #include <utility>
 
-using kernel::DumpMempool;
+using node::DumpMempool;
 
 using node::DEFAULT_MAX_BURN_AMOUNT;
 using node::DEFAULT_MAX_RAW_TX_FEE_RATE;
@@ -43,7 +43,7 @@ static RPCHelpMan sendrawtransaction()
         "\nThe transaction will be sent unconditionally to all peers, so using sendrawtransaction\n"
         "for manual rebroadcast may degrade privacy by leaking the transaction's origin, as\n"
         "nodes will normally not rebroadcast non-wallet transactions already in their mempool.\n"
-        "\nA specific exception, RPC_TRANSACTION_ALREADY_IN_CHAIN, may throw if the transaction cannot be added to the mempool.\n"
+        "\nA specific exception, RPC_TRANSACTION_ALREADY_IN_UTXO_SET, may throw if the transaction cannot be added to the mempool.\n"
         "\nRelated RPCs: createrawtransaction, signrawtransactionwithkey\n",
         {
             {"hexstring", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "The hex string of the raw transaction"},
@@ -759,13 +759,13 @@ static RPCHelpMan importmempool()
             const UniValue& use_current_time{request.params[1]["use_current_time"]};
             const UniValue& apply_fee_delta{request.params[1]["apply_fee_delta_priority"]};
             const UniValue& apply_unbroadcast{request.params[1]["apply_unbroadcast_set"]};
-            kernel::ImportMempoolOptions opts{
+            node::ImportMempoolOptions opts{
                 .use_current_time = use_current_time.isNull() ? true : use_current_time.get_bool(),
                 .apply_fee_delta_priority = apply_fee_delta.isNull() ? false : apply_fee_delta.get_bool(),
                 .apply_unbroadcast_set = apply_unbroadcast.isNull() ? false : apply_unbroadcast.get_bool(),
             };
 
-            if (!kernel::LoadMempool(mempool, load_path, chainstate, std::move(opts))) {
+            if (!node::LoadMempool(mempool, load_path, chainstate, std::move(opts))) {
                 throw JSONRPCError(RPC_MISC_ERROR, "Unable to import mempool file, see debug.log for details.");
             }
 

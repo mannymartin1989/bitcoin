@@ -332,6 +332,14 @@ public:
         return obj;
     }
 
+    UniValue operator()(const PayToAnchor& anchor) const
+    {
+        UniValue obj(UniValue::VOBJ);
+        obj.pushKV("isscript", true);
+        obj.pushKV("iswitness", true);
+        return obj;
+    }
+
     UniValue operator()(const WitnessUnknown& id) const
     {
         UniValue obj(UniValue::VOBJ);
@@ -391,8 +399,8 @@ RPCErrorCode RPCErrorFromTransactionError(TransactionError terr)
     switch (terr) {
         case TransactionError::MEMPOOL_REJECTED:
             return RPC_TRANSACTION_REJECTED;
-        case TransactionError::ALREADY_IN_CHAIN:
-            return RPC_TRANSACTION_ALREADY_IN_CHAIN;
+        case TransactionError::ALREADY_IN_UTXO_SET:
+            return RPC_VERIFY_ALREADY_IN_UTXO_SET;
         default: break;
     }
     return RPC_TRANSACTION_ERROR;

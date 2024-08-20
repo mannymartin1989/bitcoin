@@ -36,6 +36,11 @@ fn get_linter_list() -> Vec<&'static Linter> {
             lint_fn: lint_markdown
         },
         &Linter {
+            description: "Check the default arguments in python",
+            name: "py_mut_arg_default",
+            lint_fn: lint_py_mut_arg_default,
+        },
+        &Linter {
             description: "Check that std::filesystem is not used directly",
             name: "std_filesystem",
             lint_fn: lint_std_filesystem
@@ -177,6 +182,35 @@ fn lint_subtree() -> LintResult {
         Ok(())
     } else {
         Err("".to_string())
+    }
+}
+
+fn lint_py_mut_arg_default() -> LintResult {
+    let bin_name = "ruff";
+    let checks = ["B006", "B008"]
+        .iter()
+        .map(|c| format!("--select={}", c))
+        .collect::<Vec<_>>();
+    let files = check_output(
+        git()
+            .args(["ls-files", "--", "*.py"])
+            .args(get_pathspecs_exclude_subtrees()),
+    )?;
+
+    let mut cmd = Command::new(bin_name);
+    cmd.arg("check").args(checks).args(files.lines());
+
+    match cmd.status() {
+        Ok(status) if status.success() => Ok(()),
+        Ok(_) => Err(format!("`{}` found errors!", bin_name)),
+        Err(e) if e.kind() == ErrorKind::NotFound => {
+            println!(
+                "`{}` was not found in $PATH, skipping those checks.",
+                bin_name
+            );
+            Ok(())
+        }
+        Err(e) => Err(format!("Error running `{}`: {}", bin_name, e)),
     }
 }
 
@@ -410,6 +444,7 @@ fn lint_markdown() -> LintResult {
         "--offline",
         "--ignore-path",
         md_ignore_path_str.as_str(),
+        "--gitignore",
         "--root-dir",
         ".",
     ])
@@ -419,11 +454,6 @@ fn lint_markdown() -> LintResult {
         Ok(output) if output.status.success() => Ok(()),
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            let filtered_stderr: String = stderr // Filter out this annoying trailing line
-                .lines()
-                .filter(|&line| line != "The following links could not be resolved:")
-                .collect::<Vec<&str>>()
-                .join("\n");
             Err(format!(
                 r#"
 One or more markdown links are broken.
@@ -433,7 +463,7 @@ Relative links are preferred (but not required) as jumping to file works nativel
 Markdown link errors found:
 {}
                 "#,
-                filtered_stderr
+                stderr
             ))
         }
         Err(e) if e.kind() == ErrorKind::NotFound => {

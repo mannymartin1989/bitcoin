@@ -58,7 +58,7 @@ static const std::string STRING_WITH_EMBEDDED_NULL_CHAR{"1"s "\0" "1"s};
 
 /* defined in logging.cpp */
 namespace BCLog {
-    std::string LogEscapeMessage(const std::string& str);
+    std::string LogEscapeMessage(std::string_view str);
 }
 
 BOOST_FIXTURE_TEST_SUITE(util_tests, BasicTestingSetup)
@@ -459,7 +459,7 @@ BOOST_AUTO_TEST_CASE(util_IsHexNumber)
 
 BOOST_AUTO_TEST_CASE(util_seed_insecure_rand)
 {
-    SeedInsecureRand(SeedRand::ZEROS);
+    SeedRandomForTest(SeedRand::ZEROS);
     for (int mod=2;mod<11;mod++)
     {
         int mask = 1;
@@ -1508,8 +1508,10 @@ struct Tracker
     Tracker(Tracker&& t) noexcept : origin(t.origin), copies(t.copies) {}
     Tracker& operator=(const Tracker& t) noexcept
     {
-        origin = t.origin;
-        copies = t.copies + 1;
+        if (this != &t) {
+            origin = t.origin;
+            copies = t.copies + 1;
+        }
         return *this;
     }
 };

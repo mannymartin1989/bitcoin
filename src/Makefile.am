@@ -51,14 +51,14 @@ LIBBITCOIN_CRYPTO = $(LIBBITCOIN_CRYPTO_BASE)
 if ENABLE_SSE41
 LIBBITCOIN_CRYPTO_SSE41 = crypto/libbitcoin_crypto_sse41.la
 LIBBITCOIN_CRYPTO += $(LIBBITCOIN_CRYPTO_SSE41)
+if ENABLE_X86_SHANI
+LIBBITCOIN_CRYPTO_X86_SHANI = crypto/libbitcoin_crypto_x86_shani.la
+LIBBITCOIN_CRYPTO += $(LIBBITCOIN_CRYPTO_X86_SHANI)
+endif
 endif
 if ENABLE_AVX2
 LIBBITCOIN_CRYPTO_AVX2 = crypto/libbitcoin_crypto_avx2.la
 LIBBITCOIN_CRYPTO += $(LIBBITCOIN_CRYPTO_AVX2)
-endif
-if ENABLE_X86_SHANI
-LIBBITCOIN_CRYPTO_X86_SHANI = crypto/libbitcoin_crypto_x86_shani.la
-LIBBITCOIN_CRYPTO += $(LIBBITCOIN_CRYPTO_X86_SHANI)
 endif
 if ENABLE_ARM_SHANI
 LIBBITCOIN_CRYPTO_ARM_SHANI = crypto/libbitcoin_crypto_arm_shani.la
@@ -132,6 +132,7 @@ BITCOIN_CORE_H = \
   chainparamsseeds.h \
   checkqueue.h \
   clientversion.h \
+  cluster_linearize.h \
   coins.h \
   common/args.h \
   common/bloom.h \
@@ -177,6 +178,7 @@ BITCOIN_CORE_H = \
   interfaces/handler.h \
   interfaces/init.h \
   interfaces/ipc.h \
+  interfaces/mining.h \
   interfaces/node.h \
   interfaces/wallet.h \
   kernel/blockmanager_opts.h \
@@ -191,11 +193,9 @@ BITCOIN_CORE_H = \
   kernel/mempool_entry.h \
   kernel/mempool_limits.h \
   kernel/mempool_options.h \
-  kernel/mempool_persist.h \
   kernel/mempool_removal_reason.h \
   kernel/messagestartchars.h \
   kernel/notifications_interface.h \
-  kernel/validation_cache_sizes.h \
   kernel/warning.h \
   key.h \
   key_io.h \
@@ -227,6 +227,7 @@ BITCOIN_CORE_H = \
   node/interface_ui.h \
   node/kernel_notifications.h \
   node/mempool_args.h \
+  node/mempool_persist.h \
   node/mempool_persist_args.h \
   node/miner.h \
   node/mini_miner.h \
@@ -239,11 +240,9 @@ BITCOIN_CORE_H = \
   node/txreconciliation.h \
   node/types.h \
   node/utxo_snapshot.h \
-  node/validation_cache_args.h \
   node/warnings.h \
   noui.h \
   outputtype.h \
-  policy/v3_policy.h \
   policy/feerate.h \
   policy/fees.h \
   policy/fees_args.h \
@@ -251,13 +250,13 @@ BITCOIN_CORE_H = \
   policy/policy.h \
   policy/rbf.h \
   policy/settings.h \
+  policy/truc_policy.h \
   pow.h \
   protocol.h \
   psbt.h \
   random.h \
   randomenv.h \
   rest.h \
-  reverse_iterator.h \
   rpc/blockchain.h \
   rpc/client.h \
   rpc/mempool.h \
@@ -412,7 +411,6 @@ libbitcoin_node_a_SOURCES = \
   kernel/context.cpp \
   kernel/cs_main.cpp \
   kernel/disconnected_transactions.cpp \
-  kernel/mempool_persist.cpp \
   kernel/mempool_removal_reason.cpp \
   mapport.cpp \
   net.cpp \
@@ -434,6 +432,7 @@ libbitcoin_node_a_SOURCES = \
   node/interfaces.cpp \
   node/kernel_notifications.cpp \
   node/mempool_args.cpp \
+  node/mempool_persist.cpp \
   node/mempool_persist_args.cpp \
   node/miner.cpp \
   node/mini_miner.cpp \
@@ -444,15 +443,14 @@ libbitcoin_node_a_SOURCES = \
   node/transaction.cpp \
   node/txreconciliation.cpp \
   node/utxo_snapshot.cpp \
-  node/validation_cache_args.cpp \
   node/warnings.cpp \
   noui.cpp \
-  policy/v3_policy.cpp \
   policy/fees.cpp \
   policy/fees_args.cpp \
   policy/packages.cpp \
   policy/rbf.cpp \
   policy/settings.cpp \
+  policy/truc_policy.cpp \
   pow.cpp \
   rest.cpp \
   rpc/blockchain.cpp \
@@ -624,7 +622,7 @@ crypto_libbitcoin_crypto_x86_shani_la_LDFLAGS = $(AM_LDFLAGS) -static
 crypto_libbitcoin_crypto_x86_shani_la_CXXFLAGS = $(AM_CXXFLAGS) $(PIE_FLAGS) -static
 crypto_libbitcoin_crypto_x86_shani_la_CPPFLAGS = $(AM_CPPFLAGS)
 crypto_libbitcoin_crypto_x86_shani_la_CXXFLAGS += $(X86_SHANI_CXXFLAGS)
-crypto_libbitcoin_crypto_x86_shani_la_CPPFLAGS += -DENABLE_X86_SHANI
+crypto_libbitcoin_crypto_x86_shani_la_CPPFLAGS += -DENABLE_SSE41 -DENABLE_X86_SHANI
 crypto_libbitcoin_crypto_x86_shani_la_SOURCES = crypto/sha256_x86_shani.cpp
 
 # See explanation for -static in crypto_libbitcoin_crypto_base_la's LDFLAGS and
@@ -707,7 +705,6 @@ libbitcoin_common_a_SOURCES = \
   netbase.cpp \
   net_permissions.cpp \
   outputtype.cpp \
-  policy/v3_policy.cpp \
   policy/feerate.cpp \
   policy/policy.cpp \
   protocol.cpp \
@@ -949,18 +946,17 @@ libbitcoinkernel_la_SOURCES = \
   kernel/context.cpp \
   kernel/cs_main.cpp \
   kernel/disconnected_transactions.cpp \
-  kernel/mempool_persist.cpp \
   kernel/mempool_removal_reason.cpp \
   logging.cpp \
   node/blockstorage.cpp \
   node/chainstate.cpp \
   node/utxo_snapshot.cpp \
-  policy/v3_policy.cpp \
   policy/feerate.cpp \
   policy/packages.cpp \
   policy/policy.cpp \
   policy/rbf.cpp \
   policy/settings.cpp \
+  policy/truc_policy.cpp \
   pow.cpp \
   primitives/block.cpp \
   primitives/transaction.cpp \
@@ -1088,7 +1084,7 @@ libbitcoin_ipc_a_SOURCES = \
   ipc/process.cpp \
   ipc/process.h \
   ipc/protocol.h
-libbitcoin_ipc_a_CPPFLAGS = $(AM_CPPFLAGS) $(BITCOIN_INCLUDES)
+libbitcoin_ipc_a_CPPFLAGS = $(AM_CPPFLAGS) $(BITCOIN_INCLUDES) $(BOOST_CPPFLAGS)
 libbitcoin_ipc_a_CXXFLAGS = $(AM_CXXFLAGS) $(PIE_FLAGS) $(LIBMULTIPROCESS_CFLAGS)
 
 include $(MPGEN_PREFIX)/include/mpgen.mk
