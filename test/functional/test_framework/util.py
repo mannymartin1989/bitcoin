@@ -5,7 +5,7 @@
 """Helpful routines for regression testing."""
 
 from base64 import b64encode
-from decimal import Decimal, ROUND_DOWN
+from decimal import Decimal
 from subprocess import CalledProcessError
 import hashlib
 import inspect
@@ -21,7 +21,9 @@ import time
 from . import coverage
 from .authproxy import AuthServiceProxy, JSONRPCException
 from collections.abc import Callable
-from typing import Optional
+from typing import Optional, Union
+
+SATOSHI_PRECISION = Decimal('0.00000001')
 
 logger = logging.getLogger("TestFramework.utils")
 
@@ -261,8 +263,9 @@ def get_fee(tx_size, feerate_btc_kvb):
     return target_fee_sat / Decimal(1e8) # Return result in  BTC
 
 
-def satoshi_round(amount):
-    return Decimal(amount).quantize(Decimal('0.00000001'), rounding=ROUND_DOWN)
+def satoshi_round(amount: Union[int, float, str], *, rounding: str) -> Decimal:
+    """Rounds a Decimal amount to the nearest satoshi using the specified rounding mode."""
+    return Decimal(amount).quantize(SATOSHI_PRECISION, rounding=rounding)
 
 
 def wait_until_helper_internal(predicate, *, attempts=float('inf'), timeout=float('inf'), lock=None, timeout_factor=1.0):
@@ -513,12 +516,6 @@ def check_node_connections(*, node, num_in, num_out):
     info = node.getnetworkinfo()
     assert_equal(info["connections_in"], num_in)
     assert_equal(info["connections_out"], num_out)
-
-
-def read_xor_key(*, node):
-    with open(node.blocks_path / "xor.dat", "rb") as xor_f:
-        NUM_XOR_BYTES = 8 # From InitBlocksdirXorKey::xor_key.size()
-        return xor_f.read(NUM_XOR_BYTES)
 
 
 # Transaction/Block functions

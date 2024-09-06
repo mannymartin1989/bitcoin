@@ -22,6 +22,7 @@ from test_framework.util import (
     assert_approx,
     assert_equal,
     assert_raises_rpc_error,
+    sha256sum_file,
 )
 from test_framework.wallet import (
     getnewdestination,
@@ -295,7 +296,7 @@ class AssumeutxoTest(BitcoinTestFramework):
         assert_equal(n1.getblockcount(), START_HEIGHT)
 
         self.log.info(f"Creating a UTXO snapshot at height {SNAPSHOT_BASE_HEIGHT}")
-        dump_output = n0.dumptxoutset('utxos.dat')
+        dump_output = n0.dumptxoutset('utxos.dat', "latest")
 
         self.log.info("Test loading snapshot when the node tip is on the same block as the snapshot")
         assert_equal(n0.getblockcount(), SNAPSHOT_BASE_HEIGHT)
@@ -320,11 +321,15 @@ class AssumeutxoTest(BitcoinTestFramework):
         for n in self.nodes:
             assert_equal(n.getblockchaininfo()["headers"], SNAPSHOT_BASE_HEIGHT)
 
-        assert_equal(
-            dump_output['txoutset_hash'],
-            "a4bf3407ccb2cc0145c49ebba8fa91199f8a3903daf0883875941497d2493c27")
-        assert_equal(dump_output["nchaintx"], blocks[SNAPSHOT_BASE_HEIGHT].chain_tx)
         assert_equal(n0.getblockchaininfo()["blocks"], SNAPSHOT_BASE_HEIGHT)
+
+        def check_dump_output(output):
+            assert_equal(
+                output['txoutset_hash'],
+                "a4bf3407ccb2cc0145c49ebba8fa91199f8a3903daf0883875941497d2493c27")
+            assert_equal(output["nchaintx"], blocks[SNAPSHOT_BASE_HEIGHT].chain_tx)
+
+        check_dump_output(dump_output)
 
         # Mine more blocks on top of the snapshot that n1 hasn't yet seen. This
         # will allow us to test n1's sync-to-tip on top of a snapshot.
@@ -333,6 +338,39 @@ class AssumeutxoTest(BitcoinTestFramework):
         assert_equal(n0.getblockcount(), FINAL_HEIGHT)
         assert_equal(n1.getblockcount(), START_HEIGHT)
 
+        assert_equal(n0.getblockchaininfo()["blocks"], FINAL_HEIGHT)
+
+        self.log.info(f"Check that dumptxoutset works for past block heights")
+        # rollback defaults to the snapshot base height
+        dump_output2 = n0.dumptxoutset('utxos2.dat', "rollback")
+        check_dump_output(dump_output2)
+        assert_equal(sha256sum_file(dump_output['path']), sha256sum_file(dump_output2['path']))
+
+        # Rollback with specific height
+        dump_output3 = n0.dumptxoutset('utxos3.dat', rollback=SNAPSHOT_BASE_HEIGHT)
+        check_dump_output(dump_output3)
+        assert_equal(sha256sum_file(dump_output['path']), sha256sum_file(dump_output3['path']))
+
+        # Specified height that is not a snapshot height
+        prev_snap_height = SNAPSHOT_BASE_HEIGHT - 1
+        dump_output4 = n0.dumptxoutset(path='utxos4.dat', rollback=prev_snap_height)
+        assert_equal(
+            dump_output4['txoutset_hash'],
+            "8a1db0d6e958ce0d7c963bc6fc91ead596c027129bacec68acc40351037b09d7")
+        assert sha256sum_file(dump_output['path']) != sha256sum_file(dump_output4['path'])
+
+        # Use a hash instead of a height
+        prev_snap_hash = n0.getblockhash(prev_snap_height)
+        dump_output5 = n0.dumptxoutset('utxos5.dat', rollback=prev_snap_hash)
+        assert_equal(sha256sum_file(dump_output4['path']), sha256sum_file(dump_output5['path']))
+
+        # TODO: This is a hack to set m_best_header to the correct value after
+        # dumptxoutset/reconsiderblock. Otherwise the wrong error messages are
+        # returned in following tests. It can be removed once this bug is
+        # fixed. See also https://github.com/bitcoin/bitcoin/issues/26245
+        self.restart_node(0, ["-reindex"])
+
+        # Ensure n0 is back at the tip
         assert_equal(n0.getblockchaininfo()["blocks"], FINAL_HEIGHT)
 
         self.test_snapshot_with_less_work(dump_output['path'])
@@ -349,6 +387,31 @@ class AssumeutxoTest(BitcoinTestFramework):
         loaded = n1.loadtxoutset(dump_output['path'])
         assert_equal(loaded['coins_loaded'], SNAPSHOT_BASE_HEIGHT)
         assert_equal(loaded['base_height'], SNAPSHOT_BASE_HEIGHT)
+
+        self.log.info("Check that UTXO-querying RPCs operate on snapshot chainstate")
+        snapshot_hash = loaded['tip_hash']
+        snapshot_num_coins = loaded['coins_loaded']
+        # coinstatsindex might be not caught up yet and is not relevant for this test, so don't use it
+        utxo_info = n1.gettxoutsetinfo(use_index=False)
+        assert_equal(utxo_info['txouts'], snapshot_num_coins)
+        assert_equal(utxo_info['height'], SNAPSHOT_BASE_HEIGHT)
+        assert_equal(utxo_info['bestblock'], snapshot_hash)
+
+        # find coinbase output at snapshot height on node0 and scan for it on node1,
+        # where the block is not available, but the snapshot was loaded successfully
+        coinbase_tx = n0.getblock(snapshot_hash, verbosity=2)['tx'][0]
+        assert_raises_rpc_error(-1, "Block not found on disk", n1.getblock, snapshot_hash)
+        coinbase_output_descriptor = coinbase_tx['vout'][0]['scriptPubKey']['desc']
+        scan_result = n1.scantxoutset('start', [coinbase_output_descriptor])
+        assert_equal(scan_result['success'], True)
+        assert_equal(scan_result['txouts'], snapshot_num_coins)
+        assert_equal(scan_result['height'], SNAPSHOT_BASE_HEIGHT)
+        assert_equal(scan_result['bestblock'], snapshot_hash)
+        scan_utxos = [(coin['txid'], coin['vout']) for coin in scan_result['unspents']]
+        assert (coinbase_tx['txid'], 0) in scan_utxos
+
+        txout_result = n1.gettxout(coinbase_tx['txid'], 0)
+        assert_equal(txout_result['scriptPubKey']['desc'], coinbase_output_descriptor)
 
         def check_tx_counts(final: bool) -> None:
             """Check nTx and nChainTx intermediate values right after loading

@@ -1,4 +1,4 @@
-// Copyright (c) 2015-2022 The Bitcoin Core developers
+// Copyright (c) 2015-present The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -13,6 +13,7 @@
 #include <primitives/transaction.h>
 #include <pubkey.h>
 #include <stdexcept>
+#include <test/util/random.h>
 #include <util/chaintype.h> // IWYU pragma: export
 #include <util/check.h>
 #include <util/fs.h>
@@ -55,6 +56,7 @@ struct TestOpts {
     bool block_tree_db_in_memory{true};
     bool setup_net{true};
     bool setup_validation_interface{true};
+    bool min_validation_cache{false}; // Equivalent of -maxsigcachebytes=0
 };
 
 /** Basic testing setup.
@@ -63,6 +65,14 @@ struct TestOpts {
 struct BasicTestingSetup {
     util::SignalInterrupt m_interrupt;
     node::NodeContext m_node; // keep as first member to be destructed last
+
+    FastRandomContext m_rng;
+    /** Seed the global RNG state and m_rng for testing and log the seed value. This affects all randomness, except GetStrongRandBytes(). */
+    void SeedRandomForTest(SeedRand seed)
+    {
+        SeedRandomStateForTest(seed);
+        m_rng.Reseed(GetRandHash());
+    }
 
     explicit BasicTestingSetup(const ChainType chainType = ChainType::MAIN, TestOpts = {});
     ~BasicTestingSetup();
@@ -81,6 +91,7 @@ struct ChainTestingSetup : public BasicTestingSetup {
     node::CacheSizes m_cache_sizes{};
     bool m_coins_db_in_memory{true};
     bool m_block_tree_db_in_memory{true};
+    std::function<void()> m_make_chainman{};
 
     explicit ChainTestingSetup(const ChainType chainType = ChainType::MAIN, TestOpts = {});
     ~ChainTestingSetup();
