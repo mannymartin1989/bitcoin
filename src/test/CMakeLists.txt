@@ -18,7 +18,6 @@ generate_header_from_raw(data/asmap.raw test::data)
 # SOURCES property is processed to gather test suite macros.
 add_executable(test_bitcoin
   main.cpp
-  $<TARGET_OBJECTS:bitcoin_consensus>
   ${CMAKE_CURRENT_BINARY_DIR}/data/asmap.raw.h
   ${CMAKE_CURRENT_BINARY_DIR}/data/base58_encode_decode.json.h
   ${CMAKE_CURRENT_BINARY_DIR}/data/bip341_wallet_vectors.json.h
@@ -125,6 +124,7 @@ add_executable(test_bitcoin
   torcontrol_tests.cpp
   transaction_tests.cpp
   translation_tests.cpp
+  txdownload_tests.cpp
   txindex_tests.cpp
   txpackage_tests.cpp
   txreconciliation_tests.cpp
@@ -132,8 +132,10 @@ add_executable(test_bitcoin
   txvalidation_tests.cpp
   txvalidationcache_tests.cpp
   uint256_tests.cpp
+  util_string_tests.cpp
   util_tests.cpp
   util_threadnames_tests.cpp
+  util_trace_tests.cpp
   validation_block_tests.cpp
   validation_chainstate_tests.cpp
   validation_chainstatemanager_tests.cpp
@@ -148,10 +150,11 @@ target_link_libraries(test_bitcoin
   test_util
   bitcoin_cli
   bitcoin_node
+  bitcoin_consensus
   minisketch
   secp256k1
   Boost::headers
-  $<TARGET_NAME_IF_EXISTS:libevent::libevent>
+  libevent::extra
 )
 
 if(ENABLE_WALLET)
@@ -159,14 +162,6 @@ if(ENABLE_WALLET)
 endif()
 
 if(WITH_MULTIPROCESS)
-  add_library(bitcoin_ipc_test STATIC EXCLUDE_FROM_ALL
-    ipc_test.cpp
-  )
-
-  target_capnp_sources(bitcoin_ipc_test ${PROJECT_SOURCE_DIR}
-    ipc_test.capnp
-  )
-
   target_link_libraries(bitcoin_ipc_test
     PRIVATE
       core_interface
@@ -196,10 +191,10 @@ function(add_boost_test source_file)
   )
   if(test_suite_name)
     add_test(NAME ${test_suite_name}
-      COMMAND test_bitcoin --run_test=${test_suite_name} --catch_system_error=no
+      COMMAND test_bitcoin --run_test=${test_suite_name} --catch_system_error=no --log_level=test_suite -- DEBUG_LOG_OUT
     )
     set_property(TEST ${test_suite_name} PROPERTY
-      SKIP_REGULAR_EXPRESSION "no test cases matching filter" "Skipping"
+      SKIP_REGULAR_EXPRESSION "no test cases matching filter"
     )
   endif()
 endfunction()

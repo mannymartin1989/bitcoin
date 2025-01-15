@@ -5,25 +5,17 @@
 include(GNUInstallDirs)
 include(AddWindowsResources)
 
-configure_file(${PROJECT_SOURCE_DIR}/cmake/bitcoin-config.h.in config/bitcoin-config.h USE_SOURCE_PERMISSIONS @ONLY)
+configure_file(${PROJECT_SOURCE_DIR}/cmake/bitcoin-build-config.h.in bitcoin-build-config.h USE_SOURCE_PERMISSIONS @ONLY)
 include_directories(${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
 
-# TODO: After the transition from Autotools to CMake, the obj/ subdirectory
-#       could be dropped as its only purpose was to separate a generated header
-#       from source files.
 add_custom_target(generate_build_info
-  BYPRODUCTS ${PROJECT_BINARY_DIR}/src/obj/build.h
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${PROJECT_BINARY_DIR}/src/obj
-  COMMAND ${CMAKE_COMMAND} -DBUILD_INFO_HEADER_PATH=${PROJECT_BINARY_DIR}/src/obj/build.h -DSOURCE_DIR=${PROJECT_SOURCE_DIR} -P ${PROJECT_SOURCE_DIR}/cmake/script/GenerateBuildInfo.cmake
-  COMMENT "Generating obj/build.h"
+  BYPRODUCTS ${PROJECT_BINARY_DIR}/src/bitcoin-build-info.h
+  COMMAND ${CMAKE_COMMAND} -DBUILD_INFO_HEADER_PATH=${PROJECT_BINARY_DIR}/src/bitcoin-build-info.h -DSOURCE_DIR=${PROJECT_SOURCE_DIR} -P ${PROJECT_SOURCE_DIR}/cmake/script/GenerateBuildInfo.cmake
+  COMMENT "Generating bitcoin-build-info.h"
   VERBATIM
 )
 add_library(bitcoin_clientversion OBJECT EXCLUDE_FROM_ALL
   clientversion.cpp
-)
-target_compile_definitions(bitcoin_clientversion
-  PRIVATE
-    HAVE_BUILD_INFO
 )
 target_link_libraries(bitcoin_clientversion
   PRIVATE
@@ -46,16 +38,25 @@ message("Configuring secp256k1 subtree...")
 set(SECP256K1_DISABLE_SHARED ON CACHE BOOL "" FORCE)
 set(SECP256K1_ENABLE_MODULE_ECDH OFF CACHE BOOL "" FORCE)
 set(SECP256K1_ENABLE_MODULE_RECOVERY ON CACHE BOOL "" FORCE)
+set(SECP256K1_ENABLE_MODULE_MUSIG OFF CACHE BOOL "" FORCE)
 set(SECP256K1_BUILD_BENCHMARK OFF CACHE BOOL "" FORCE)
 set(SECP256K1_BUILD_TESTS ${BUILD_TESTS} CACHE BOOL "" FORCE)
 set(SECP256K1_BUILD_EXHAUSTIVE_TESTS ${BUILD_TESTS} CACHE BOOL "" FORCE)
+if(NOT BUILD_TESTS)
+  # Always skip the ctime tests, if we are building no other tests.
+  # Otherwise, they are built if Valgrind is available. See SECP256K1_VALGRIND.
+  set(SECP256K1_BUILD_CTIME_TESTS ${BUILD_TESTS} CACHE BOOL "" FORCE)
+endif()
 set(SECP256K1_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 include(GetTargetInterface)
 # -fsanitize and related flags apply to both C++ and C,
-# so we can pass them down to libsecp256k1 as CFLAGS.
+# so we can pass them down to libsecp256k1 as CFLAGS and LDFLAGS.
 get_target_interface(core_sanitizer_cxx_flags "" sanitize_interface COMPILE_OPTIONS)
-set(SECP256K1_LATE_CFLAGS ${core_sanitizer_cxx_flags} CACHE STRING "" FORCE)
+set(SECP256K1_APPEND_CFLAGS ${core_sanitizer_cxx_flags} CACHE STRING "" FORCE)
 unset(core_sanitizer_cxx_flags)
+get_target_interface(core_sanitizer_linker_flags "" sanitize_interface LINK_OPTIONS)
+set(SECP256K1_APPEND_LDFLAGS ${core_sanitizer_linker_flags} CACHE STRING "" FORCE)
+unset(core_sanitizer_linker_flags)
 # We want to build libsecp256k1 with the most tested RelWithDebInfo configuration.
 enable_language(C)
 foreach(config IN LISTS CMAKE_BUILD_TYPE CMAKE_CONFIGURATION_TYPES)
@@ -72,6 +73,9 @@ if(DEFINED ENV{CFLAGS})
 endif()
 set(CMAKE_EXPORT_COMPILE_COMMANDS OFF)
 add_subdirectory(secp256k1)
+set_target_properties(secp256k1 PROPERTIES
+  EXCLUDE_FROM_ALL TRUE
+)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 string(APPEND CMAKE_C_COMPILE_OBJECT " ${APPEND_CPPFLAGS} ${APPEND_CFLAGS}")
 
@@ -114,6 +118,8 @@ add_library(bitcoin_common STATIC EXCLUDE_FROM_ALL
   common/init.cpp
   common/interfaces.cpp
   common/messages.cpp
+  common/netif.cpp
+  common/pcp.cpp
   common/run_command.cpp
   common/settings.cpp
   common/signmessage.cpp
@@ -244,10 +250,12 @@ add_library(bitcoin_node STATIC EXCLUDE_FROM_ALL
   node/psbt.cpp
   node/timeoffsets.cpp
   node/transaction.cpp
+  node/txdownloadman_impl.cpp
   node/txreconciliation.cpp
   node/utxo_snapshot.cpp
   node/warnings.cpp
   noui.cpp
+  policy/ephemeral_policy.cpp
   policy/fees.cpp
   policy/fees_args.cpp
   policy/packages.cpp
@@ -286,15 +294,14 @@ target_link_libraries(bitcoin_node
     core_interface
     bitcoin_common
     bitcoin_util
+    $<TARGET_NAME_IF_EXISTS:bitcoin_zmq>
     leveldb
     minisketch
     univalue
     Boost::headers
-    $<TARGET_NAME_IF_EXISTS:libevent::libevent>
+    $<TARGET_NAME_IF_EXISTS:libevent::core>
+    $<TARGET_NAME_IF_EXISTS:libevent::extra>
     $<TARGET_NAME_IF_EXISTS:libevent::pthreads>
-    $<TARGET_NAME_IF_EXISTS:NATPMP::NATPMP>
-    $<TARGET_NAME_IF_EXISTS:MiniUPnPc::MiniUPnPc>
-    $<TARGET_NAME_IF_EXISTS:bitcoin_zmq>
     $<TARGET_NAME_IF_EXISTS:USDT::headers>
 )
 
@@ -325,6 +332,22 @@ if(WITH_MULTIPROCESS)
     $<TARGET_NAME_IF_EXISTS:bitcoin_wallet>
   )
   list(APPEND installable_targets bitcoin-node)
+
+  if(BUILD_TESTS)
+    # bitcoin_ipc_test library target is defined here in src/CMakeLists.txt
+    # instead of src/test/CMakeLists.txt so capnp files in src/test/ are able to
+    # reference capnp files in src/ipc/capnp/ by relative path. The Cap'n Proto
+    # compiler only allows importing by relative path when the importing and
+    # imported files are underneath the same compilation source prefix, so the
+    # source prefix must be src/, not src/test/
+    add_library(bitcoin_ipc_test STATIC EXCLUDE_FROM_ALL
+      test/ipc_test.cpp
+    )
+    target_capnp_sources(bitcoin_ipc_test ${PROJECT_SOURCE_DIR}
+      test/ipc_test.capnp
+    )
+    add_dependencies(bitcoin_ipc_test bitcoin_ipc_headers)
+  endif()
 endif()
 
 
@@ -348,7 +371,8 @@ if(BUILD_CLI)
     bitcoin_cli
     bitcoin_common
     bitcoin_util
-    $<TARGET_NAME_IF_EXISTS:libevent::libevent>
+    libevent::core
+    libevent::extra
   )
   list(APPEND installable_targets bitcoin-cli)
 endif()

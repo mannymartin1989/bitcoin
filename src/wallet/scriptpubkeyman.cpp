@@ -525,6 +525,12 @@ bool LegacyScriptPubKeyMan::HavePrivateKeys() const
     return !mapKeys.empty() || !mapCryptedKeys.empty();
 }
 
+bool LegacyScriptPubKeyMan::HaveCryptedKeys() const
+{
+    LOCK(cs_KeyStore);
+    return !mapCryptedKeys.empty();
+}
+
 void LegacyScriptPubKeyMan::RewriteDB()
 {
     LOCK(cs_KeyStore);
@@ -1799,12 +1805,18 @@ std::optional<MigrationData> LegacyDataSPKM::MigrateToDescriptor()
                 keyid_it++;
                 continue;
             }
-            if (m_hd_chain.seed_id == meta.hd_seed_id || m_inactive_hd_chains.count(meta.hd_seed_id) > 0) {
+            if (!meta.hd_seed_id.IsNull() && (m_hd_chain.seed_id == meta.hd_seed_id || m_inactive_hd_chains.count(meta.hd_seed_id) > 0)) {
                 keyid_it = keyids.erase(keyid_it);
                 continue;
             }
         }
         keyid_it++;
+    }
+
+    WalletBatch batch(m_storage.GetDatabase());
+    if (!batch.TxnBegin()) {
+        LogPrintf("Error generating descriptors for migration, cannot initialize db transaction\n");
+        return std::nullopt;
     }
 
     // keyids is now all non-HD keys. Each key will have its own combo descriptor
@@ -1837,8 +1849,8 @@ std::optional<MigrationData> LegacyDataSPKM::MigrateToDescriptor()
 
         // Make the DescriptorScriptPubKeyMan and get the scriptPubKeys
         auto desc_spk_man = std::make_unique<DescriptorScriptPubKeyMan>(m_storage, w_desc, /*keypool_size=*/0);
-        desc_spk_man->AddDescriptorKey(key, key.GetPubKey());
-        desc_spk_man->TopUp();
+        WITH_LOCK(desc_spk_man->cs_desc_man, desc_spk_man->AddDescriptorKeyWithDB(batch, key, key.GetPubKey()));
+        desc_spk_man->TopUpWithDB(batch);
         auto desc_spks = desc_spk_man->GetScriptPubKeys();
 
         // Remove the scriptPubKeys from our current set
@@ -1883,8 +1895,8 @@ std::optional<MigrationData> LegacyDataSPKM::MigrateToDescriptor()
 
             // Make the DescriptorScriptPubKeyMan and get the scriptPubKeys
             auto desc_spk_man = std::make_unique<DescriptorScriptPubKeyMan>(m_storage, w_desc, /*keypool_size=*/0);
-            desc_spk_man->AddDescriptorKey(master_key.key, master_key.key.GetPubKey());
-            desc_spk_man->TopUp();
+            WITH_LOCK(desc_spk_man->cs_desc_man, desc_spk_man->AddDescriptorKeyWithDB(batch, master_key.key, master_key.key.GetPubKey()));
+            desc_spk_man->TopUpWithDB(batch);
             auto desc_spks = desc_spk_man->GetScriptPubKeys();
 
             // Remove the scriptPubKeys from our current set
@@ -1950,9 +1962,9 @@ std::optional<MigrationData> LegacyDataSPKM::MigrateToDescriptor()
                 if (!GetKey(keyid, key)) {
                     continue;
                 }
-                desc_spk_man->AddDescriptorKey(key, key.GetPubKey());
+                WITH_LOCK(desc_spk_man->cs_desc_man, desc_spk_man->AddDescriptorKeyWithDB(batch, key, key.GetPubKey()));
             }
-            desc_spk_man->TopUp();
+            desc_spk_man->TopUpWithDB(batch);
             auto desc_spks_set = desc_spk_man->GetScriptPubKeys();
             desc_spks.insert(desc_spks.end(), desc_spks_set.begin(), desc_spks_set.end());
 
@@ -2019,13 +2031,26 @@ std::optional<MigrationData> LegacyDataSPKM::MigrateToDescriptor()
 
     // Make sure that we have accounted for all scriptPubKeys
     assert(spks.size() == 0);
+
+    // Finalize transaction
+    if (!batch.TxnCommit()) {
+        LogPrintf("Error generating descriptors for migration, cannot commit db transaction\n");
+        return std::nullopt;
+    }
+
     return out;
 }
 
 bool LegacyDataSPKM::DeleteRecords()
 {
+    return RunWithinTxn(m_storage.GetDatabase(), /*process_desc=*/"delete legacy records", [&](WalletBatch& batch){
+        return DeleteRecordsWithDB(batch);
+    });
+}
+
+bool LegacyDataSPKM::DeleteRecordsWithDB(WalletBatch& batch)
+{
     LOCK(cs_KeyStore);
-    WalletBatch batch(m_storage.GetDatabase());
     return batch.EraseRecords(DBKeys::LEGACY_TYPES);
 }
 
@@ -2390,6 +2415,12 @@ bool DescriptorScriptPubKeyMan::HavePrivateKeys() const
 {
     LOCK(cs_desc_man);
     return m_map_keys.size() > 0 || m_map_crypted_keys.size() > 0;
+}
+
+bool DescriptorScriptPubKeyMan::HaveCryptedKeys() const
+{
+    LOCK(cs_desc_man);
+    return !m_map_crypted_keys.empty();
 }
 
 std::optional<int64_t> DescriptorScriptPubKeyMan::GetOldestKeyPoolTime() const

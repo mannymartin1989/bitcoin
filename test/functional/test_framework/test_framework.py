@@ -129,7 +129,11 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
 
         try:
             self.setup()
-            self.run_test()
+            if self.options.test_methods:
+                self.run_test_methods()
+            else:
+                self.run_test()
+
         except JSONRPCException:
             self.log.exception("JSONRPC error")
             self.success = TestStatus.FAILED
@@ -154,6 +158,13 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
         finally:
             exit_code = self.shutdown()
             sys.exit(exit_code)
+
+    def run_test_methods(self):
+        for method_name in self.options.test_methods:
+            self.log.info(f"Attempting to execute method: {method_name}")
+            method = getattr(self, method_name)
+            method()
+            self.log.info(f"Method '{method_name}' executed successfully.")
 
     def parse_args(self, test_file):
         previous_releases_path = os.getenv("PREVIOUS_RELEASES_DIR") or os.getcwd() + "/releases"
@@ -194,6 +205,8 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
                             help="use BIP324 v2 connections between all nodes by default")
         parser.add_argument("--v1transport", dest="v1transport", default=False, action="store_true",
                             help="Explicitly use v1 transport (can be used to overwrite global --v2transport option)")
+        parser.add_argument("--test_methods", dest="test_methods", nargs='*',
+                            help="Run specified test methods sequentially instead of the full test. Use only for methods that do not depend on any context set up in run_test or other methods.")
 
         self.add_options(parser)
         # Running TestShell in a Jupyter notebook causes an additional -f argument
@@ -349,7 +362,7 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
             self.log.error("Hint: Call {} '{}' to consolidate all logs".format(os.path.normpath(os.path.dirname(os.path.realpath(__file__)) + "/../combine_logs.py"), self.options.tmpdir))
             self.log.error("")
             self.log.error("If this failure happened unexpectedly or intermittently, please file a bug and provide a link or upload of the combined log.")
-            self.log.error(self.config['environment']['PACKAGE_BUGREPORT'])
+            self.log.error(self.config['environment']['CLIENT_BUGREPORT'])
             self.log.error("")
             exit_code = TEST_EXIT_FAILED
         # Logging.shutdown will not remove stream- and filehandlers, so we must
@@ -513,6 +526,15 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
             binary = [get_bin_from_version(v, 'bitcoind', self.options.bitcoind) for v in versions]
         if binary_cli is None:
             binary_cli = [get_bin_from_version(v, 'bitcoin-cli', self.options.bitcoincli) for v in versions]
+        # Fail test if any of the needed release binaries is missing
+        bins_missing = False
+        for bin_path in binary + binary_cli:
+            if shutil.which(bin_path) is None:
+                self.log.error(f"Binary not found: {bin_path}")
+                bins_missing = True
+        if bins_missing:
+            raise AssertionError("At least one release binary is missing. "
+                                 "Previous releases binaries can be downloaded via `test/get_previous_releases.py -b`.")
         assert_equal(len(extra_confs), num_nodes)
         assert_equal(len(extra_args), num_nodes)
         assert_equal(len(versions), num_nodes)
@@ -787,8 +809,8 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
         self.sync_blocks(nodes)
         self.sync_mempools(nodes)
 
-    def wait_until(self, test_function, timeout=60):
-        return wait_until_helper_internal(test_function, timeout=timeout, timeout_factor=self.options.timeout_factor)
+    def wait_until(self, test_function, timeout=60, check_interval=0.05):
+        return wait_until_helper_internal(test_function, timeout=timeout, timeout_factor=self.options.timeout_factor, check_interval=check_interval)
 
     # Private helper methods. These should not be accessed by the subclass test scripts.
 

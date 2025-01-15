@@ -2,12 +2,11 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include <config/bitcoin-config.h> // IWYU pragma: keep
-
 #include <httpserver.h>
 
 #include <chainparamsbase.h>
 #include <common/args.h>
+#include <common/messages.h>
 #include <compat/compat.h>
 #include <logging.h>
 #include <netbase.h>
@@ -42,6 +41,8 @@
 #include <event2/util.h>
 
 #include <support/events.h>
+
+using common::InvalidPortErrMsg;
 
 /** Maximum size of http request (request line + headers) */
 static const size_t MAX_HEADERS_SIZE = 8192;
@@ -226,7 +227,7 @@ static bool InitHTTPAllowList()
         const CSubNet subnet{LookupSubNet(strAllow)};
         if (!subnet.IsValid()) {
             uiInterface.ThreadSafeMessageBox(
-                strprintf(Untranslated("Invalid -rpcallowip subnet specification: %s. Valid are a single IP (e.g. 1.2.3.4), a network/netmask (e.g. 1.2.3.4/255.255.255.0) or a network/CIDR (e.g. 1.2.3.4/24)."), strAllow),
+                Untranslated(strprintf("Invalid -rpcallowip subnet specification: %s. Valid are a single IP (e.g. 1.2.3.4), a network/netmask (e.g. 1.2.3.4/255.255.255.0) or a network/CIDR (e.g. 1.2.3.4/24).", strAllow)),
                 "", CClientUIInterface::MSG_ERROR);
             return false;
         }
@@ -315,7 +316,7 @@ static void http_request_cb(struct evhttp_request* req, void* arg)
         if (i->exactMatch)
             match = (strURI == i->prefix);
         else
-            match = (strURI.substr(0, i->prefix.size()) == i->prefix);
+            match = strURI.starts_with(i->prefix);
         if (match) {
             path = strURI.substr(i->prefix.size());
             break;
@@ -374,7 +375,10 @@ static bool HTTPBindAddresses(struct evhttp* http)
         for (const std::string& strRPCBind : gArgs.GetArgs("-rpcbind")) {
             uint16_t port{http_port};
             std::string host;
-            SplitHostPort(strRPCBind, port, host);
+            if (!SplitHostPort(strRPCBind, port, host)) {
+                LogError("%s\n", InvalidPortErrMsg("-rpcbind", strRPCBind).original);
+                return false;
+            }
             endpoints.emplace_back(host, port);
         }
     }

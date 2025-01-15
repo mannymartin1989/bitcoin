@@ -8,12 +8,6 @@
 # Centos Stream 9, https://www.centos.org/cl-vs-cs/#end-of-life, EOL in May 2027:
 #  - CMake 3.26.5, https://mirror.stream.centos.org/9-stream/AppStream/x86_64/os/Packages/
 cmake_minimum_required(VERSION 3.22)
-if(POLICY CMP0141)
-  # MSVC debug information format flags are selected by an abstraction.
-  # We want to use the CMAKE_MSVC_DEBUG_INFORMATION_FORMAT variable
-  # to select the MSVC debug information format.
-  cmake_policy(SET CMP0141 NEW)
-endif()
 
 if (${CMAKE_SOURCE_DIR} STREQUAL ${CMAKE_BINARY_DIR})
   message(FATAL_ERROR "In-source builds are not allowed.")
@@ -22,13 +16,13 @@ endif()
 #=============================
 # Project / Package metadata
 #=============================
-set(PACKAGE_NAME "Bitcoin Core")
+set(CLIENT_NAME "Bitcoin Core")
 set(CLIENT_VERSION_MAJOR 28)
 set(CLIENT_VERSION_MINOR 99)
 set(CLIENT_VERSION_BUILD 0)
 set(CLIENT_VERSION_RC 0)
 set(CLIENT_VERSION_IS_RELEASE "false")
-set(COPYRIGHT_YEAR "2024")
+set(COPYRIGHT_YEAR "2025")
 
 # During the enabling of the CXX and CXXOBJ languages, we modify
 # CMake's compiler/linker invocation strings by appending the content
@@ -53,14 +47,14 @@ project(BitcoinCore
   LANGUAGES NONE
 )
 
-set(PACKAGE_VERSION ${PROJECT_VERSION})
+set(CLIENT_VERSION_STRING ${PROJECT_VERSION})
 if(CLIENT_VERSION_RC GREATER 0)
-  string(APPEND PACKAGE_VERSION "rc${CLIENT_VERSION_RC}")
+  string(APPEND CLIENT_VERSION_STRING "rc${CLIENT_VERSION_RC}")
 endif()
 
 set(COPYRIGHT_HOLDERS "The %s developers")
-set(COPYRIGHT_HOLDERS_FINAL "The ${PACKAGE_NAME} developers")
-set(PACKAGE_BUGREPORT "https://github.com/bitcoin/bitcoin/issues")
+set(COPYRIGHT_HOLDERS_FINAL "The ${CLIENT_NAME} developers")
+set(CLIENT_BUGREPORT "https://github.com/bitcoin/bitcoin/issues")
 
 #=============================
 # Language setup
@@ -103,14 +97,12 @@ if(WITH_SQLITE)
     find_package(SQLite3 3.7.17 REQUIRED)
   endif()
   set(USE_SQLITE ON)
-  set(ENABLE_WALLET ON)
 endif()
 option(WITH_BDB "Enable Berkeley DB (BDB) wallet support." OFF)
 cmake_dependent_option(WARN_INCOMPATIBLE_BDB "Warn when using a Berkeley DB (BDB) version other than 4.8." ON "WITH_BDB" OFF)
 if(WITH_BDB)
   find_package(BerkeleyDB 4.8 MODULE REQUIRED)
   set(USE_BDB ON)
-  set(ENABLE_WALLET ON)
   if(NOT BerkeleyDB_VERSION VERSION_EQUAL 4.8)
     message(WARNING "Found Berkeley DB (BDB) other than 4.8.\n"
                     "BDB (legacy) wallets opened by this build will not be portable!"
@@ -129,26 +121,9 @@ option(REDUCE_EXPORTS "Attempt to reduce exported symbols in the resulting execu
 option(WERROR "Treat compiler warnings as errors." OFF)
 option(WITH_CCACHE "Attempt to use ccache for compiling." ON)
 
-option(WITH_NATPMP "Enable NAT-PMP." OFF)
-if(WITH_NATPMP)
-  find_package(NATPMP MODULE REQUIRED)
-endif()
-
-option(WITH_MINIUPNPC "Enable UPnP." OFF)
-if(WITH_MINIUPNPC)
-  find_package(MiniUPnPc MODULE REQUIRED)
-endif()
-
 option(WITH_ZMQ "Enable ZMQ notifications." OFF)
 if(WITH_ZMQ)
-  if(VCPKG_TARGET_TRIPLET)
-    find_package(ZeroMQ CONFIG REQUIRED)
-  else()
-    # The ZeroMQ project has provided config files since v4.2.2.
-    # TODO: Switch to find_package(ZeroMQ) at some point in the future.
-    find_package(PkgConfig REQUIRED)
-    pkg_check_modules(libzmq REQUIRED IMPORTED_TARGET libzmq>=4)
-  endif()
+  find_package(ZeroMQ 4.0.0 MODULE REQUIRED)
 endif()
 
 option(WITH_USDT "Enable tracepoints for Userspace, Statically Defined Tracing." OFF)
@@ -160,8 +135,7 @@ cmake_dependent_option(ENABLE_EXTERNAL_SIGNER "Enable external signer support." 
 
 cmake_dependent_option(WITH_QRENCODE "Enable QR code support." ON "BUILD_GUI" OFF)
 if(WITH_QRENCODE)
-  find_package(PkgConfig REQUIRED)
-  pkg_check_modules(libqrencode REQUIRED IMPORTED_TARGET libqrencode)
+  find_package(QRencode MODULE REQUIRED)
   set(USE_QRCODE TRUE)
 endif()
 
@@ -188,7 +162,7 @@ if(BUILD_GUI)
   if(BUILD_GUI_TESTS)
     list(APPEND qt_components Test)
   endif()
-  find_package(Qt5 5.11.3 MODULE REQUIRED
+  find_package(Qt 5.11.3 MODULE REQUIRED
     COMPONENTS ${qt_components}
   )
   unset(qt_components)
@@ -196,7 +170,7 @@ endif()
 
 option(BUILD_BENCH "Build bench_bitcoin executable." OFF)
 option(BUILD_FUZZ_BINARY "Build fuzz binary." OFF)
-cmake_dependent_option(BUILD_FOR_FUZZING "Build for fuzzing. Enabling this will disable all other targets and override BUILD_FUZZ_BINARY." OFF "NOT MSVC" OFF)
+option(BUILD_FOR_FUZZING "Build for fuzzing. Enabling this will disable all other targets and override BUILD_FUZZ_BINARY." OFF)
 
 option(INSTALL_MAN "Install man pages." ON)
 
@@ -245,8 +219,6 @@ if(BUILD_FOR_FUZZING)
   set(BUILD_WALLET_TOOL OFF)
   set(BUILD_GUI OFF)
   set(ENABLE_EXTERNAL_SIGNER OFF)
-  set(WITH_NATPMP OFF)
-  set(WITH_MINIUPNPC OFF)
   set(WITH_ZMQ OFF)
   set(BUILD_TESTS OFF)
   set(BUILD_GUI_TESTS OFF)
@@ -254,7 +226,7 @@ if(BUILD_FOR_FUZZING)
   set(BUILD_FUZZ_BINARY ON)
 
   target_compile_definitions(core_interface INTERFACE
-    ABORT_ON_FAILED_ASSUME
+    FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
   )
 endif()
 
@@ -281,8 +253,8 @@ if(WIN32)
   ]=]
 
   target_compile_definitions(core_interface INTERFACE
-    _WIN32_WINNT=0x0601
-    _WIN32_IE=0x0501
+    _WIN32_WINNT=0x0A00
+    _WIN32_IE=0x0A00
     WIN32_LEAN_AND_MEAN
     NOMINMAX
   )
@@ -320,9 +292,20 @@ if(WIN32)
     # See https://gcc.gnu.org/bugzilla/show_bug.cgi?id=54412.
     try_append_cxx_flags("-Wa,-muse-unaligned-vector-move" TARGET core_interface SKIP_LINK)
     try_append_linker_flag("-static" TARGET core_interface)
-    # We require Windows 7 (NT 6.1) or later.
+    # We support Windows 10+, however it's not possible to set these values accordingly,
+    # due to a bug in mingw-w64. See https://sourceforge.net/p/mingw-w64/bugs/968/.
+    # As a best effort, target Windows 8.
     try_append_linker_flag("-Wl,--major-subsystem-version,6" TARGET core_interface)
-    try_append_linker_flag("-Wl,--minor-subsystem-version,1" TARGET core_interface)
+    try_append_linker_flag("-Wl,--minor-subsystem-version,2" TARGET core_interface)
+  endif()
+
+  # Workaround producing large object files, which cannot be handled by the assembler.
+  # More likely to happen with no, or lower levels of optimisation.
+  # See discussion in https://github.com/bitcoin/bitcoin/issues/28109.
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+    try_append_cxx_flags("/bigobj" TARGET core_interface_debug SKIP_LINK)
+  else()
+    try_append_cxx_flags("-Wa,-mbig-obj" TARGET core_interface_debug SKIP_LINK)
   endif()
 endif()
 
@@ -335,10 +318,7 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 4)
 endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-  target_compile_definitions(core_interface INTERFACE
-    MAC_OSX
-    OBJC_OLD_DISPATCH_PROTOTYPES=0
-  )
+  target_compile_definitions(core_interface INTERFACE OBJC_OLD_DISPATCH_PROTOTYPES=0)
   # These flags are specific to ld64, and may cause issues with other linkers.
   # For example: GNU ld will interpret -dead_strip as -de and then try and use
   # "ad_strip" as the symbol for the entry point.
@@ -448,6 +428,7 @@ else()
   try_append_cxx_flags("-Wunreachable-code" TARGET warn_interface SKIP_LINK)
   try_append_cxx_flags("-Wdocumentation" TARGET warn_interface SKIP_LINK)
   try_append_cxx_flags("-Wself-assign" TARGET warn_interface SKIP_LINK)
+  try_append_cxx_flags("-Wbidi-chars=any" TARGET warn_interface SKIP_LINK)
   try_append_cxx_flags("-Wundef" TARGET warn_interface SKIP_LINK)
 
   # Some compilers (gcc) ignore unknown -Wno-* options, but warn about all
@@ -465,6 +446,18 @@ configure_file(contrib/filter-lcov.py filter-lcov.py USE_SOURCE_PERMISSIONS COPY
 
 # Don't allow extended (non-ASCII) symbols in identifiers. This is easier for code review.
 try_append_cxx_flags("-fno-extended-identifiers" TARGET core_interface SKIP_LINK)
+
+# Avoiding the `-ffile-prefix-map` compiler option because it implies
+# `-fcoverage-prefix-map` on Clang or `-fprofile-prefix-map` on GCC,
+# which can cause issues with coverage builds, particularly when using
+# Clang in the OSS-Fuzz environment due to its use of other options
+# and a third party script, or with GCC.
+try_append_cxx_flags("-fdebug-prefix-map=A=B" TARGET core_interface SKIP_LINK
+  IF_CHECK_PASSED "-fdebug-prefix-map=${PROJECT_SOURCE_DIR}/src=."
+)
+try_append_cxx_flags("-fmacro-prefix-map=A=B" TARGET core_interface SKIP_LINK
+  IF_CHECK_PASSED "-fmacro-prefix-map=${PROJECT_SOURCE_DIR}/src=."
+)
 
 # Currently all versions of gcc are subject to a class of bugs, see the
 # gccbug_90348 test case (only reproduces on GCC 11 and earlier) and
@@ -504,15 +497,18 @@ if(ENABLE_HARDENING)
     try_append_cxx_flags("-fcf-protection=full" TARGET hardening_interface)
 
     if(MINGW)
-      # stack-clash-protection doesn't compile with GCC 10 and earlier.
-      # In any case, it is a no-op for Windows.
+      # stack-clash-protection is a no-op for Windows.
       # See https://gcc.gnu.org/bugzilla/show_bug.cgi?id=90458 for more details.
     else()
       try_append_cxx_flags("-fstack-clash-protection" TARGET hardening_interface)
     endif()
 
     if(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64" OR CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
-      try_append_cxx_flags("-mbranch-protection=bti" TARGET hardening_interface SKIP_LINK)
+      if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+        try_append_cxx_flags("-mbranch-protection=bti" TARGET hardening_interface SKIP_LINK)
+      else()
+        try_append_cxx_flags("-mbranch-protection=standard" TARGET hardening_interface SKIP_LINK)
+      endif()
     endif()
 
     try_append_linker_flag("-Wl,--enable-reloc-section" TARGET hardening_interface)
@@ -547,7 +543,7 @@ if(WERROR)
   unset(werror_flag)
 endif()
 
-find_package(Python3 3.9 COMPONENTS Interpreter)
+find_package(Python3 3.10 COMPONENTS Interpreter)
 if(Python3_EXECUTABLE)
   set(PYTHON_COMMAND ${Python3_EXECUTABLE})
 else()
@@ -572,6 +568,12 @@ endif()
 if(BUILD_TESTS)
   enable_testing()
 endif()
+
+if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.29)
+  # have "make test" depend on "make all"
+  set(CMAKE_SKIP_TEST_ALL_DEPENDENCY FALSE)
+endif()
+
 # TODO: The `CMAKE_SKIP_BUILD_RPATH` variable setting can be deleted
 #       in the future after reordering Guix script commands to
 #       perform binary checks after the installation step.
@@ -622,9 +624,6 @@ if(ENABLE_WALLET)
   message("   - legacy wallets (Berkeley DB) ..... ${WITH_BDB}")
 endif()
 message("  external signer ..................... ${ENABLE_EXTERNAL_SIGNER}")
-message("  port mapping:")
-message("   - using NAT-PMP .................... ${WITH_NATPMP}")
-message("   - using UPnP ....................... ${WITH_MINIUPNPC}")
 message("  ZeroMQ .............................. ${WITH_ZMQ}")
 message("  USDT tracing ........................ ${WITH_USDT}")
 message("  QR code (GUI) ....................... ${WITH_QRENCODE}")

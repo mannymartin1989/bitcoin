@@ -354,8 +354,14 @@ Development tips and tricks
 
 ### Compiling for debugging
 
-Run configure with `--enable-debug` to add additional compiler flags that
-produce better debugging builds.
+When using the default build configuration by running `cmake -B build`, the
+`-DCMAKE_BUILD_TYPE` is set to `RelWithDebInfo`. This option adds debug symbols
+but also performs some compiler optimizations that may make debugging trickier
+as the code may not correspond directly to the source.
+
+If you need to build exclusively for debugging, set the `-DCMAKE_BUILD_TYPE`
+to `Debug` (i.e. `-DCMAKE_BUILD_TYPE=Debug`). You can always check the cmake
+build options of an existing build with `ccmake build`.
 
 ### Show sources in debugging
 
@@ -363,18 +369,18 @@ If you have ccache enabled, absolute paths are stripped from debug information
 with the `-fdebug-prefix-map` and `-fmacro-prefix-map` options (if supported by the
 compiler). This might break source file detection in case you move binaries
 after compilation, debug from the directory other than the project root or use
-an IDE that only supports absolute paths for debugging.
+an IDE that only supports absolute paths for debugging (e.g. it won't stop at breakpoints).
 
 There are a few possible fixes:
 
 1. Configure source file mapping.
 
-For `gdb` create or append to `.gdbinit` file:
+For `gdb` create or append to [`.gdbinit` file](https://sourceware.org/gdb/current/onlinedocs/gdb#gdbinit-man):
 ```
 set substitute-path ./src /path/to/project/root/src
 ```
 
-For `lldb` create or append to `.lldbinit` file:
+For `lldb` create or append to [`.lldbinit` file](https://lldb.llvm.org/man/lldb.html#configuration-files):
 ```
 settings set target.source-map ./src /path/to/project/root/src
 ```
@@ -385,6 +391,8 @@ ln -s /path/to/project/root/src src
 ```
 
 3. Use `debugedit` to modify debug information in the binary.
+
+4. If your IDE has an option for this, change your breakpoints to use the file name only.
 
 ### `debug.log`
 
@@ -412,8 +420,8 @@ see [test/functional/](/test/functional) for tests that run in `-regtest` mode.
 ### DEBUG_LOCKORDER
 
 Bitcoin Core is a multi-threaded application, and deadlocks or other
-multi-threading bugs can be very difficult to track down. The `--enable-debug`
-configure option adds `-DDEBUG_LOCKORDER` to the compiler flags. This inserts
+multi-threading bugs can be very difficult to track down. The `-DCMAKE_BUILD_TYPE=Debug`
+build option adds `-DDEBUG_LOCKORDER` to the compiler flags. This inserts
 run-time checks to keep track of which locks are held and adds warnings to the
 `debug.log` file if inconsistencies are detected.
 
@@ -423,9 +431,8 @@ Defining `DEBUG_LOCKCONTENTION` adds a "lock" logging category to the logging
 RPC that, when enabled, logs the location and duration of each lock contention
 to the `debug.log` file.
 
-The `--enable-debug` configure option adds `-DDEBUG_LOCKCONTENTION` to the
-compiler flags. You may also enable it manually for a non-debug build by running
-configure with `-DDEBUG_LOCKCONTENTION` added to your CPPFLAGS,
+The `-DCMAKE_BUILD_TYPE=Debug` build option adds `-DDEBUG_LOCKCONTENTION` to the
+compiler flags. You may also enable it manually by building with `-DDEBUG_LOCKCONTENTION` added to your CPPFLAGS,
 i.e. `CPPFLAGS="-DDEBUG_LOCKCONTENTION"`, then build and run bitcoind.
 
 You can then use the `-debug=lock` configuration option at bitcoind startup or
@@ -555,7 +562,7 @@ See the functional test documentation for how to invoke perf within tests.
 Bitcoin Core can be compiled with various "sanitizers" enabled, which add
 instrumentation for issues regarding things like memory safety, thread race
 conditions, or undefined behavior. This is controlled with the
-`--with-sanitizers` configure flag, which should be a comma separated list of
+`-DSANITIZERS` cmake build flag, which should be a comma separated list of
 sanitizers to enable. The sanitizer list should correspond to supported
 `-fsanitize=` options in your compiler. These sanitizers have runtime overhead,
 so they are most useful when testing changes or producing debugging builds.
@@ -564,16 +571,16 @@ Some examples:
 
 ```bash
 # Enable both the address sanitizer and the undefined behavior sanitizer
-./configure --with-sanitizers=address,undefined
+cmake -B build -DSANITIZERS=address,undefined
 
 # Enable the thread sanitizer
-./configure --with-sanitizers=thread
+cmake -B build -DSANITIZERS=thread
 ```
 
 If you are compiling with GCC you will typically need to install corresponding
 "san" libraries to actually compile with these flags, e.g. libasan for the
 address sanitizer, libtsan for the thread sanitizer, and libubsan for the
-undefined sanitizer. If you are missing required libraries, the configure script
+undefined sanitizer. If you are missing required libraries, the build
 will fail with a linker error when testing the sanitizer flags.
 
 The test suite should pass cleanly with the `thread` and `undefined` sanitizers. You
@@ -589,7 +596,7 @@ See the CI config for more examples, and upstream documentation for more informa
 about any additional options.
 
 Not all sanitizer options can be enabled at the same time, e.g. trying to build
-with `--with-sanitizers=address,thread` will fail in the configure script as
+with `-DSANITIZERS=address,thread` will fail in the build as
 these sanitizers are mutually incompatible. Refer to your compiler manual to
 learn more about these options and which sanitizers are supported by your
 compiler.
@@ -603,7 +610,6 @@ Additional resources:
  * [UndefinedBehaviorSanitizer](https://clang.llvm.org/docs/UndefinedBehaviorSanitizer.html)
  * [GCC Instrumentation Options](https://gcc.gnu.org/onlinedocs/gcc/Instrumentation-Options.html)
  * [Google Sanitizers Wiki](https://github.com/google/sanitizers/wiki)
- * [Issue #12691: Enable -fsanitize flags in Travis](https://github.com/bitcoin/bitcoin/issues/12691)
 
 Locking/mutex usage notes
 -------------------------
@@ -614,7 +620,7 @@ The code is multi-threaded and uses mutexes and the
 Deadlocks due to inconsistent lock ordering (thread 1 locks `cs_main` and then
 `cs_wallet`, while thread 2 locks them in the opposite order: result, deadlock
 as each waits for the other to release its lock) are a problem. Compile with
-`-DDEBUG_LOCKORDER` (or use `--enable-debug`) to get lock order inconsistencies
+`-DDEBUG_LOCKORDER` (or use `-DCMAKE_BUILD_TYPE=Debug`) to get lock order inconsistencies
 reported in the `debug.log` file.
 
 Re-architecting the core code so there are better-defined interfaces
@@ -953,7 +959,7 @@ Strings and formatting
     - *Rationale*: Qt has built-in functionality for converting their string
       type from/to C++. No need to roll your own.
 
-  - In cases where do you call `.c_str()`, you might want to additionally check that the string does not contain embedded '\0' characters, because
+  - In cases where you do call `.c_str()`, you might want to additionally check that the string does not contain embedded '\0' characters, because
     it will (necessarily) truncate the string. This might be used to hide parts of the string from logging or to circumvent
     checks. If a use of strings is sensitive to this, take care to check the string for embedded NULL characters first
     and reject it if there are any (see `ParsePrechecks` in `strencodings.cpp` for an example).
@@ -1057,8 +1063,8 @@ bool Chainstate::PreciousBlock(BlockValidationState& state, CBlockIndex* pindex)
 ```
 
 - Build and run tests with `-DDEBUG_LOCKORDER` to verify that no potential
-  deadlocks are introduced. As of 0.12, this is defined by default when
-  configuring with `--enable-debug`.
+  deadlocks are introduced. This is defined by default when
+  building with `-DCMAKE_BUILD_TYPE=Debug`.
 
 - When using `LOCK`/`TRY_LOCK` be aware that the lock exists in the context of
   the current scope, so surround the statement and the code that needs the lock
@@ -1392,6 +1398,12 @@ A few guidelines for introducing and reviewing new RPC interfaces:
   - *Exception*: Some RPC calls can take both an `int` and `bool`, most notably when a bool was switched
     to a multi-value, or due to other historical reasons. **Always** have false map to 0 and
     true to 1 in this case.
+
+- For new RPC methods, if implementing a `verbosity` argument, use integer verbosity rather than boolean.
+  Disallow usage of boolean verbosity (see `ParseVerbosity()` in [util.h](/src/rpc/util.h)).
+
+  - *Rationale*: Integer verbosity allows for multiple values. Undocumented boolean verbosity is deprecated
+    and new RPC methods should prevent its use.
 
 - Don't forget to fill in the argument names correctly in the RPC command table.
 

@@ -11,10 +11,13 @@ See feature_assumeutxo.py for background.
 - TODO: test loading a wallet (backup) on a pruned node
 
 """
+from test_framework.address import address_to_scriptpubkey
 from test_framework.test_framework import BitcoinTestFramework
+from test_framework.messages import COIN
 from test_framework.util import (
     assert_equal,
     assert_raises_rpc_error,
+    ensure_for,
 )
 from test_framework.wallet import MiniWallet
 
@@ -32,9 +35,10 @@ class AssumeutxoTest(BitcoinTestFramework):
 
     def set_test_params(self):
         """Use the pregenerated, deterministic chain up to height 199."""
-        self.num_nodes = 2
+        self.num_nodes = 3
         self.rpc_timeout = 120
         self.extra_args = [
+            [],
             [],
             [],
         ]
@@ -42,7 +46,7 @@ class AssumeutxoTest(BitcoinTestFramework):
     def setup_network(self):
         """Start with the nodes disconnected so that one can generate a snapshot
         including blocks the other hasn't yet seen."""
-        self.add_nodes(2)
+        self.add_nodes(3)
         self.start_nodes(extra_args=self.extra_args)
 
     def run_test(self):
@@ -55,6 +59,7 @@ class AssumeutxoTest(BitcoinTestFramework):
         """
         n0 = self.nodes[0]
         n1 = self.nodes[1]
+        n2 = self.nodes[2]
 
         self.mini_wallet = MiniWallet(n0)
 
@@ -62,8 +67,16 @@ class AssumeutxoTest(BitcoinTestFramework):
         for n in self.nodes:
             n.setmocktime(n.getblockheader(n.getbestblockhash())['time'])
 
+        # Create a wallet that we will create a backup for later (at snapshot height)
         n0.createwallet('w')
         w = n0.get_wallet_rpc("w")
+        w_address = w.getnewaddress()
+
+        # Create another wallet and backup now (before snapshot height)
+        n0.createwallet('w2')
+        w2 = n0.get_wallet_rpc("w2")
+        w2_address = w2.getnewaddress()
+        w2.backupwallet("backup_w2.dat")
 
         # Generate a series of blocks that `n0` will have in the snapshot,
         # but that n1 doesn't yet see. In order for the snapshot to activate,
@@ -78,12 +91,15 @@ class AssumeutxoTest(BitcoinTestFramework):
 
             # make n1 aware of the new header, but don't give it the block.
             n1.submitheader(newblock)
+            n2.submitheader(newblock)
 
         # Ensure everyone is seeing the same headers.
         for n in self.nodes:
             assert_equal(n.getblockchaininfo()[
                          "headers"], SNAPSHOT_BASE_HEIGHT)
 
+        # This backup is created at the snapshot height, so it's
+        # not part of the background sync anymore
         w.backupwallet("backup_w.dat")
 
         self.log.info("-- Testing assumeutxo")
@@ -103,10 +119,17 @@ class AssumeutxoTest(BitcoinTestFramework):
 
         # Mine more blocks on top of the snapshot that n1 hasn't yet seen. This
         # will allow us to test n1's sync-to-tip on top of a snapshot.
-        self.generate(n0, nblocks=100, sync_fun=self.no_op)
+        w_skp = address_to_scriptpubkey(w_address)
+        w2_skp = address_to_scriptpubkey(w2_address)
+        for i in range(100):
+            if i % 3 == 0:
+                self.mini_wallet.send_to(from_node=n0, scriptPubKey=w_skp, amount=1 * COIN)
+                self.mini_wallet.send_to(from_node=n0, scriptPubKey=w2_skp, amount=10 * COIN)
+            self.generate(n0, nblocks=1, sync_fun=self.no_op)
 
         assert_equal(n0.getblockcount(), FINAL_HEIGHT)
         assert_equal(n1.getblockcount(), START_HEIGHT)
+        assert_equal(n2.getblockcount(), START_HEIGHT)
 
         assert_equal(n0.getblockchaininfo()["blocks"], FINAL_HEIGHT)
 
@@ -126,8 +149,13 @@ class AssumeutxoTest(BitcoinTestFramework):
 
         assert_equal(n1.getblockchaininfo()["blocks"], SNAPSHOT_BASE_HEIGHT)
 
-        self.log.info("Backup can't be loaded during background sync")
-        assert_raises_rpc_error(-4, "Wallet loading failed. Error loading wallet. Wallet requires blocks to be downloaded, and software does not currently support loading wallets while blocks are being downloaded out of order when using assumeutxo snapshots. Wallet should be able to load successfully after node sync reaches height 299", n1.restorewallet, "w", "backup_w.dat")
+        self.log.info("Backup from the snapshot height can be loaded during background sync")
+        n1.restorewallet("w", "backup_w.dat")
+        # Balance of w wallet is still still 0 because n1 has not synced yet
+        assert_equal(n1.getbalance(), 0)
+
+        self.log.info("Backup from before the snapshot height can't be loaded during background sync")
+        assert_raises_rpc_error(-4, "Wallet loading failed. Error loading wallet. Wallet requires blocks to be downloaded, and software does not currently support loading wallets while blocks are being downloaded out of order when using assumeutxo snapshots. Wallet should be able to load successfully after node sync reaches height 299", n1.restorewallet, "w2", "backup_w2.dat")
 
         PAUSE_HEIGHT = FINAL_HEIGHT - 40
 
@@ -159,8 +187,22 @@ class AssumeutxoTest(BitcoinTestFramework):
         self.log.info("Ensuring background validation completes")
         self.wait_until(lambda: len(n1.getchainstates()['chainstates']) == 1)
 
-        self.log.info("Ensuring wallet can be restored from backup")
-        n1.restorewallet("w", "backup_w.dat")
+        self.log.info("Ensuring wallet can be restored from a backup that was created before the snapshot height")
+        n1.restorewallet("w2", "backup_w2.dat")
+        # Check balance of w2 wallet
+        assert_equal(n1.getbalance(), 340)
+
+        # Check balance of w wallet after node is synced
+        n1.loadwallet("w")
+        w = n1.get_wallet_rpc("w")
+        assert_equal(w.getbalance(), 34)
+
+        self.log.info("Check balance of a wallet that is active during snapshot completion")
+        n2.restorewallet("w", "backup_w.dat")
+        loaded = n2.loadtxoutset(dump_output['path'])
+        self.connect_nodes(0, 2)
+        self.wait_until(lambda: len(n2.getchainstates()['chainstates']) == 1)
+        ensure_for(duration=1, f=lambda: (n2.getbalance() == 34))
 
 
 if __name__ == '__main__':

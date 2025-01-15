@@ -2,6 +2,8 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or https://opensource.org/license/mit/.
 
+set(CMAKE_AUTOMOC_MOC_OPTIONS "-p${CMAKE_CURRENT_SOURCE_DIR}")
+
 add_executable(test_bitcoin-qt
   apptests.cpp
   optiontests.cpp
@@ -29,14 +31,6 @@ if(ENABLE_WALLET)
       addressbooktests.cpp
       wallettests.cpp
       ../../wallet/test/wallet_test_fixture.cpp
-  )
-endif()
-
-if(NOT QT_IS_STATIC)
-  add_custom_command(
-    TARGET test_bitcoin-qt POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_PROPERTY:Qt5::QMinimalIntegrationPlugin,LOCATION_$<UPPER_CASE:$<CONFIG>>> $<TARGET_FILE_DIR:test_bitcoin-qt>/plugins/platforms
-    VERBATIM
   )
 endif()
 

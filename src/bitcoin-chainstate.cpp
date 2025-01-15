@@ -180,27 +180,6 @@ int main(int argc, char* argv[])
             break;
         }
 
-        if (block.vtx.empty() || !block.vtx[0]->IsCoinBase()) {
-            std::cerr << "Block does not start with a coinbase" << std::endl;
-            break;
-        }
-
-        uint256 hash = block.GetHash();
-        {
-            LOCK(cs_main);
-            const CBlockIndex* pindex = chainman.m_blockman.LookupBlockIndex(hash);
-            if (pindex) {
-                if (pindex->IsValid(BLOCK_VALID_SCRIPTS)) {
-                    std::cerr << "duplicate" << std::endl;
-                    break;
-                }
-                if (pindex->nStatus & BLOCK_FAILED_MASK) {
-                    std::cerr << "duplicate-invalid" << std::endl;
-                    break;
-                }
-            }
-        }
-
         {
             LOCK(cs_main);
             const CBlockIndex* pindex = chainman.m_blockman.LookupBlockIndex(block.hashPrevBlock);
@@ -253,9 +232,6 @@ int main(int argc, char* argv[])
         case BlockValidationResult::BLOCK_CONSENSUS:
             std::cerr << "invalid by consensus rules (excluding any below reasons)" << std::endl;
             break;
-        case BlockValidationResult::BLOCK_RECENT_CONSENSUS_CHANGE:
-            std::cerr << "Invalid by a change to consensus rules more recent than SegWit." << std::endl;
-            break;
         case BlockValidationResult::BLOCK_CACHED_INVALID:
             std::cerr << "this block was cached as being invalid and we didn't store the reason why" << std::endl;
             break;
@@ -283,8 +259,6 @@ int main(int argc, char* argv[])
 epilogue:
     // Without this precise shutdown sequence, there will be a lot of nullptr
     // dereferencing and UB.
-    if (chainman.m_thread_load.joinable()) chainman.m_thread_load.join();
-
     validation_signals.FlushBackgroundCallbacks();
     {
         LOCK(cs_main);

@@ -72,9 +72,11 @@ add_executable(fuzz
   netbase_dns_lookup.cpp
   node_eviction.cpp
   p2p_handshake.cpp
+  p2p_headers_presync.cpp
   p2p_transport_serialization.cpp
   package_eval.cpp
   parse_hd_keypath.cpp
+  parse_iso8601.cpp
   parse_numbers.cpp
   parse_script.cpp
   parse_univalue.cpp
@@ -116,12 +118,16 @@ add_executable(fuzz
   timeoffsets.cpp
   torcontrol.cpp
   transaction.cpp
+  txdownloadman.cpp
   tx_in.cpp
   tx_out.cpp
   tx_pool.cpp
   txorphan.cpp
   txrequest.cpp
-  utxo_snapshot.cpp
+  # Visual Studio 2022 version 17.12 introduced a bug
+  # that causes an internal compiler error.
+  # See: https://github.com/bitcoin/bitcoin/issues/31303
+  $<$<VERSION_LESS:${MSVC_VERSION},1942>:utxo_snapshot.cpp>
   utxo_total_supply.cpp
   validation_load_mempool.cpp
   vecdeque.cpp
@@ -138,7 +144,7 @@ target_link_libraries(fuzz
   univalue
   secp256k1
   Boost::headers
-  $<TARGET_NAME_IF_EXISTS:libevent::libevent>
+  libevent::extra
 )
 
 if(ENABLE_WALLET)

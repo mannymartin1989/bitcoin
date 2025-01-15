@@ -3,7 +3,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include <config/bitcoin-config.h> // IWYU pragma: keep
+#include <bitcoin-build-config.h> // IWYU pragma: keep
 
 #include <random.h>
 
@@ -34,7 +34,7 @@
 #include <sys/time.h>
 #endif
 
-#if defined(HAVE_GETRANDOM) || (defined(HAVE_GETENTROPY_RAND) && defined(MAC_OSX))
+#if defined(HAVE_GETRANDOM) || (defined(HAVE_GETENTROPY_RAND) && defined(__APPLE__))
 #include <sys/random.h>
 #endif
 
@@ -387,7 +387,7 @@ void GetOSRand(unsigned char *ent32)
        The function call is always successful.
      */
     arc4random_buf(ent32, NUM_OS_RANDOM_BYTES);
-#elif defined(HAVE_GETENTROPY_RAND) && defined(MAC_OSX)
+#elif defined(HAVE_GETENTROPY_RAND) && defined(__APPLE__)
     if (getentropy(ent32, NUM_OS_RANDOM_BYTES) != 0) {
         RandFailure();
     }
@@ -599,7 +599,7 @@ void SeedPeriodic(CSHA512& hasher, RNGState& rng) noexcept
     // Add the events hasher into the mix
     rng.SeedEvents(hasher);
 
-    // Dynamic environment data (performance monitoring, ...)
+    // Dynamic environment data (clocks, resource usage, ...)
     auto old_size = hasher.Size();
     RandAddDynamicEnv(hasher);
     LogDebug(BCLog::RAND, "Feeding %i bytes of dynamic environment data into RNG\n", hasher.Size() - old_size);
@@ -616,7 +616,7 @@ void SeedStartup(CSHA512& hasher, RNGState& rng) noexcept
     // Everything that the 'slow' seeder includes.
     SeedSlow(hasher, rng);
 
-    // Dynamic environment data (performance monitoring, ...)
+    // Dynamic environment data (clocks, resource usage, ...)
     auto old_size = hasher.Size();
     RandAddDynamicEnv(hasher);
 
@@ -671,9 +671,11 @@ void MakeRandDeterministicDANGEROUS(const uint256& seed) noexcept
 {
     GetRNGState().MakeDeterministic(seed);
 }
+std::atomic<bool> g_used_g_prng{false}; // Only accessed from tests
 
 void GetRandBytes(Span<unsigned char> bytes) noexcept
 {
+    g_used_g_prng = true;
     ProcRand(bytes.data(), bytes.size(), RNGLevel::FAST, /*always_use_real_rng=*/false);
 }
 

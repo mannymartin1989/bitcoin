@@ -67,16 +67,22 @@ public:
     std::vector<std::pair<CTransactionRef, NodeId>> GetChildrenFromDifferentPeer(const CTransactionRef& parent, NodeId nodeid) const;
 
     /** Return how many entries exist in the orphange */
-    size_t Size()
+    size_t Size() const
     {
         return m_orphans.size();
     }
 
-protected:
-    struct OrphanTx {
+    /** Allows providing orphan information externally */
+    struct OrphanTxBase {
         CTransactionRef tx;
         NodeId fromPeer;
         NodeSeconds nTimeExpire;
+    };
+
+    std::vector<OrphanTxBase> GetOrphanTransactions() const;
+
+protected:
+    struct OrphanTx : public OrphanTxBase {
         size_t list_pos;
     };
 

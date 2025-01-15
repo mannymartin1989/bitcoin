@@ -33,6 +33,7 @@ add_library(bitcoinkernel
   ../node/blockstorage.cpp
   ../node/chainstate.cpp
   ../node/utxo_snapshot.cpp
+  ../policy/ephemeral_policy.cpp
   ../policy/feerate.cpp
   ../policy/packages.cpp
   ../policy/policy.cpp
@@ -84,6 +85,7 @@ target_link_libraries(bitcoinkernel
     bitcoin_crypto
     leveldb
     secp256k1
+    $<TARGET_NAME_IF_EXISTS:USDT::headers>
   PUBLIC
     Boost::headers
 )
@@ -98,9 +100,45 @@ set_target_properties(bitcoinkernel PROPERTIES
   CXX_VISIBILITY_PRESET default
 )
 
+# When building the static library, install all static libraries the
+# bitcoinkernel depends on.
+if(NOT BUILD_SHARED_LIBS)
+  # Recursively get all the static libraries a target depends on and put them in libs_out
+  function(get_target_static_link_libs target libs_out)
+    get_target_property(linked_libraries ${target} LINK_LIBRARIES)
+    foreach(dep ${linked_libraries})
+      if(TARGET ${dep})
+        get_target_property(dep_type ${dep} TYPE)
+        if(dep_type STREQUAL "STATIC_LIBRARY")
+          list(APPEND ${libs_out} ${dep})
+          get_target_static_link_libs(${dep} ${libs_out})
+        endif()
+      endif()
+    endforeach()
+    set(${libs_out} ${${libs_out}} PARENT_SCOPE)
+  endfunction()
+
+  set(all_kernel_static_link_libs "")
+  get_target_static_link_libs(bitcoinkernel all_kernel_static_link_libs)
+
+  install(TARGETS ${all_kernel_static_link_libs} ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT Kernel)
+  list(TRANSFORM all_kernel_static_link_libs PREPEND "-l")
+  # LIBS_PRIVATE is substituted in the pkg-config file.
+  list(JOIN all_kernel_static_link_libs " " LIBS_PRIVATE)
+endif()
+
+configure_file(${PROJECT_SOURCE_DIR}/libbitcoinkernel.pc.in ${PROJECT_BINARY_DIR}/libbitcoinkernel.pc @ONLY)
+install(FILES ${PROJECT_BINARY_DIR}/libbitcoinkernel.pc DESTINATION "${CMAKE_INSTALL_LIBDIR}/pkgconfig" COMPONENT Kernel)
+
 include(GNUInstallDirs)
 install(TARGETS bitcoinkernel
-  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  RUNTIME
+    DESTINATION ${CMAKE_INSTALL_BINDIR}
+    COMPONENT Kernel
+  LIBRARY
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    COMPONENT Kernel
+  ARCHIVE
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    COMPONENT Kernel
 )

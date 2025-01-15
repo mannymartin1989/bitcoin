@@ -221,6 +221,7 @@ public:
     virtual bool Upgrade(int prev_version, int new_version, bilingual_str& error) { return true; }
 
     virtual bool HavePrivateKeys() const { return false; }
+    virtual bool HaveCryptedKeys() const { return false; }
 
     //! The action to do when the DB needs rewrite
     virtual void RewriteDB() {}
@@ -254,9 +255,9 @@ public:
 
     /** Prepends the wallet name in logging output to ease debugging in multi-wallet use cases */
     template <typename... Params>
-    void WalletLogPrintf(const char* fmt, Params... parameters) const
+    void WalletLogPrintf(util::ConstevalFormatString<sizeof...(Params)> wallet_fmt, const Params&... params) const
     {
-        LogPrintf(("%s " + std::string{fmt}).c_str(), m_storage.GetDisplayName(), parameters...);
+        LogInfo("%s %s", m_storage.GetDisplayName(), tfm::format(wallet_fmt, params...));
     };
 
     /** Watch-only address added */
@@ -366,8 +367,9 @@ public:
     /** Get the DescriptorScriptPubKeyMans (with private keys) that have the same scriptPubKeys as this LegacyScriptPubKeyMan.
      * Does not modify this ScriptPubKeyMan. */
     std::optional<MigrationData> MigrateToDescriptor();
-    /** Delete all the records ofthis LegacyScriptPubKeyMan from disk*/
+    /** Delete all the records of this LegacyScriptPubKeyMan from disk*/
     bool DeleteRecords();
+    bool DeleteRecordsWithDB(WalletBatch& batch);
 };
 
 // Implements the full legacy wallet behavior
@@ -472,6 +474,7 @@ public:
     bool Upgrade(int prev_version, int new_version, bilingual_str& error) override;
 
     bool HavePrivateKeys() const override;
+    bool HaveCryptedKeys() const override;
 
     void RewriteDB() override;
 
@@ -582,6 +585,7 @@ public:
 
 class DescriptorScriptPubKeyMan : public ScriptPubKeyMan
 {
+    friend class LegacyDataSPKM;
 private:
     using ScriptPubKeyMap = std::map<CScript, int32_t>; // Map of scripts to descriptor range index
     using PubKeyMap = std::map<CPubKey, int32_t>; // Map of pubkeys involved in scripts to descriptor range index
@@ -659,6 +663,7 @@ public:
     bool HasPrivKey(const CKeyID& keyid) const EXCLUSIVE_LOCKS_REQUIRED(cs_desc_man);
     //! Retrieve the particular key if it is available. Returns nullopt if the key is not in the wallet, or if the wallet is locked.
     std::optional<CKey> GetKey(const CKeyID& keyid) const EXCLUSIVE_LOCKS_REQUIRED(cs_desc_man);
+    bool HaveCryptedKeys() const override;
 
     std::optional<int64_t> GetOldestKeyPoolTime() const override;
     unsigned int GetKeyPoolSize() const override;
