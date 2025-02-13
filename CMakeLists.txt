@@ -70,6 +70,14 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 list(APPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake/module)
+include(ProcessConfigurations)
+
+# Flatten static lib dependencies.
+# Without this, if libfoo.a depends on libbar.a, libfoo's objects can't begin
+# to be compiled until libbar.a has been created.
+if (NOT DEFINED CMAKE_OPTIMIZE_DEPENDENCIES)
+  set(CMAKE_OPTIMIZE_DEPENDENCIES TRUE)
+endif()
 
 #=============================
 # Configurable options
@@ -143,8 +151,8 @@ cmake_dependent_option(WITH_DBUS "Enable DBus support." ON "CMAKE_SYSTEM_NAME ST
 
 option(WITH_MULTIPROCESS "Build multiprocess bitcoin-node and bitcoin-gui executables in addition to monolithic bitcoind and bitcoin-qt executables. Requires libmultiprocess library. Experimental." OFF)
 if(WITH_MULTIPROCESS)
-  find_package(Libmultiprocess COMPONENTS Lib)
-  find_package(LibmultiprocessNative COMPONENTS Bin
+  find_package(Libmultiprocess REQUIRED COMPONENTS Lib)
+  find_package(LibmultiprocessNative REQUIRED COMPONENTS Bin
     NAMES Libmultiprocess
   )
 endif()
@@ -230,10 +238,17 @@ if(BUILD_FOR_FUZZING)
   )
 endif()
 
-include(ProcessConfigurations)
-
 include(TryAppendCXXFlags)
 include(TryAppendLinkerFlag)
+
+# Redefine/adjust per-configuration flags.
+target_compile_definitions(core_interface_debug INTERFACE
+  DEBUG
+  DEBUG_LOCKORDER
+  DEBUG_LOCKCONTENTION
+  RPC_DOC_CHECK
+  ABORT_ON_FAILED_ASSUME
+)
 
 if(WIN32)
   #[=[
@@ -397,6 +412,7 @@ target_link_libraries(core_interface INTERFACE warn_interface)
 if(MSVC)
   try_append_cxx_flags("/W3" TARGET warn_interface SKIP_LINK)
   try_append_cxx_flags("/wd4018" TARGET warn_interface SKIP_LINK)
+  try_append_cxx_flags("/wd4146" TARGET warn_interface SKIP_LINK)
   try_append_cxx_flags("/wd4244" TARGET warn_interface SKIP_LINK)
   try_append_cxx_flags("/wd4267" TARGET warn_interface SKIP_LINK)
   try_append_cxx_flags("/wd4715" TARGET warn_interface SKIP_LINK)
@@ -580,8 +596,13 @@ endif()
 # Relevant discussions:
 # - https://github.com/hebasto/bitcoin/pull/236#issuecomment-2183120953
 # - https://github.com/bitcoin/bitcoin/pull/30312#issuecomment-2191235833
-set(CMAKE_SKIP_BUILD_RPATH TRUE)
-set(CMAKE_SKIP_INSTALL_RPATH TRUE)
+# NetBSD always requires runtime paths to be set for executables.
+if(CMAKE_SYSTEM_NAME STREQUAL "NetBSD")
+  set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
+else()
+  set(CMAKE_SKIP_BUILD_RPATH TRUE)
+  set(CMAKE_SKIP_INSTALL_RPATH TRUE)
+endif()
 add_subdirectory(test)
 add_subdirectory(doc)
 
@@ -603,7 +624,12 @@ message("Configure summary")
 message("=================")
 message("Executables:")
 message("  bitcoind ............................ ${BUILD_DAEMON}")
-message("  bitcoin-node (multiprocess) ......... ${WITH_MULTIPROCESS}")
+if(BUILD_DAEMON AND WITH_MULTIPROCESS)
+  set(bitcoin_daemon_status ON)
+else()
+  set(bitcoin_daemon_status OFF)
+endif()
+message("  bitcoin-node (multiprocess) ......... ${bitcoin_daemon_status}")
 message("  bitcoin-qt (GUI) .................... ${BUILD_GUI}")
 if(BUILD_GUI AND WITH_MULTIPROCESS)
   set(bitcoin_gui_status ON)
