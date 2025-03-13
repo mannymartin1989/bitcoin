@@ -9,15 +9,21 @@
 #  - CMake 3.26.5, https://mirror.stream.centos.org/9-stream/AppStream/x86_64/os/Packages/
 cmake_minimum_required(VERSION 3.22)
 
-if (${CMAKE_SOURCE_DIR} STREQUAL ${CMAKE_BINARY_DIR})
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_BINARY_DIR)
   message(FATAL_ERROR "In-source builds are not allowed.")
+endif()
+
+if(POLICY CMP0171)
+  # `codegen` is a reserved target name.
+  # See: https://cmake.org/cmake/help/latest/policy/CMP0171.html
+  cmake_policy(SET CMP0171 NEW)
 endif()
 
 #=============================
 # Project / Package metadata
 #=============================
 set(CLIENT_NAME "Bitcoin Core")
-set(CLIENT_VERSION_MAJOR 28)
+set(CLIENT_VERSION_MAJOR 29)
 set(CLIENT_VERSION_MINOR 99)
 set(CLIENT_VERSION_BUILD 0)
 set(CLIENT_VERSION_RC 0)
@@ -194,16 +200,8 @@ string(APPEND CMAKE_CXX_LINK_EXECUTABLE " ${APPEND_LDFLAGS}")
 
 set(configure_warnings)
 
-include(CheckPIESupported)
-check_pie_supported(OUTPUT_VARIABLE check_pie_output LANGUAGES CXX)
-if(CMAKE_CXX_LINK_PIE_SUPPORTED)
-  set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-elseif(NOT WIN32)
-  # The warning is superfluous for Windows.
-  message(WARNING "PIE is not supported at link time: ${check_pie_output}")
-  list(APPEND configure_warnings "Position independent code disabled.")
-endif()
-unset(check_pie_output)
+include(CheckLinkerSupportsPIE)
+check_linker_supports_pie(configure_warnings)
 
 # The core_interface library aims to encapsulate common build flags.
 # It is a usage requirement for all targets except for secp256k1, which
@@ -386,13 +384,16 @@ endif()
 target_link_options(sanitize_interface INTERFACE ${SANITIZER_LDFLAGS})
 
 if(BUILD_FUZZ_BINARY)
-  include(CheckSourceCompilesAndLinks)
-  check_cxx_source_links_with_flags("${SANITIZER_LDFLAGS}" "
+  target_link_libraries(core_interface INTERFACE ${FUZZ_LIBS})
+  include(CheckSourceCompilesWithFlags)
+  check_cxx_source_compiles_with_flags("
       #include <cstdint>
       #include <cstddef>
       extern \"C\" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) { return 0; }
       // No main() function.
     " FUZZ_BINARY_LINKS_WITHOUT_MAIN_FUNCTION
+    LDFLAGS ${SANITIZER_LDFLAGS}
+    LINK_LIBRARIES ${FUZZ_LIBS}
   )
 endif()
 
@@ -458,6 +459,7 @@ endif()
 configure_file(cmake/script/Coverage.cmake Coverage.cmake USE_SOURCE_PERMISSIONS COPYONLY)
 configure_file(cmake/script/CoverageFuzz.cmake CoverageFuzz.cmake USE_SOURCE_PERMISSIONS COPYONLY)
 configure_file(cmake/script/CoverageInclude.cmake.in CoverageInclude.cmake USE_SOURCE_PERMISSIONS @ONLY)
+configure_file(cmake/script/cov_tool_wrapper.sh.in cov_tool_wrapper.sh.in USE_SOURCE_PERMISSIONS COPYONLY)
 configure_file(contrib/filter-lcov.py filter-lcov.py USE_SOURCE_PERMISSIONS COPYONLY)
 
 # Don't allow extended (non-ASCII) symbols in identifiers. This is easier for code review.
@@ -559,6 +561,13 @@ if(WERROR)
   unset(werror_flag)
 endif()
 
+# Prefer Unix-style package components over frameworks on macOS.
+# This improves compatibility with Python version managers.
+set(Python3_FIND_FRAMEWORK LAST CACHE STRING "")
+# Search for generic names before more specialized ones. This
+# improves compatibility with Python version managers that use shims.
+set(Python3_FIND_UNVERSIONED_NAMES FIRST CACHE STRING "")
+mark_as_advanced(Python3_FIND_FRAMEWORK Python3_FIND_UNVERSIONED_NAMES)
 find_package(Python3 3.10 COMPONENTS Interpreter)
 if(Python3_EXECUTABLE)
   set(PYTHON_COMMAND ${Python3_EXECUTABLE})
@@ -606,9 +615,6 @@ endif()
 add_subdirectory(test)
 add_subdirectory(doc)
 
-include(cmake/crc32c.cmake)
-include(cmake/leveldb.cmake)
-include(cmake/minisketch.cmake)
 add_subdirectory(src)
 
 include(cmake/tests.cmake)

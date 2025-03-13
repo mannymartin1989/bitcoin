@@ -35,15 +35,11 @@ function(add_maintenance_targets)
     VERBATIM
   )
 
-  if(ENABLE_HARDENING)
-    add_custom_target(check-security
-      COMMAND ${CMAKE_COMMAND} -E echo "Checking binary security..."
-      COMMAND ${PYTHON_COMMAND} ${PROJECT_SOURCE_DIR}/contrib/devtools/security-check.py ${executables}
-      VERBATIM
-    )
-  else()
-    add_custom_target(check-security)
-  endif()
+  add_custom_target(check-security
+    COMMAND ${CMAKE_COMMAND} -E echo "Checking binary security..."
+    COMMAND ${PYTHON_COMMAND} ${PROJECT_SOURCE_DIR}/contrib/devtools/security-check.py ${executables}
+    VERBATIM
+  )
 endfunction()
 
 function(add_windows_deploy_target)
@@ -84,7 +80,7 @@ function(add_macos_deploy_target)
 
     add_custom_command(
       OUTPUT ${PROJECT_BINARY_DIR}/${macos_app}/Contents/MacOS/Bitcoin-Qt
-      COMMAND ${CMAKE_COMMAND} --install ${PROJECT_BINARY_DIR} --config $<CONFIG> --component GUI --prefix ${macos_app}/Contents/MacOS --strip
+      COMMAND ${CMAKE_COMMAND} --install ${PROJECT_BINARY_DIR} --config $<CONFIG> --component bitcoin-qt --prefix ${macos_app}/Contents/MacOS --strip
       COMMAND ${CMAKE_COMMAND} -E rename ${macos_app}/Contents/MacOS/bin/$<TARGET_FILE_NAME:bitcoin-qt> ${macos_app}/Contents/MacOS/Bitcoin-Qt
       COMMAND ${CMAKE_COMMAND} -E rm -rf ${macos_app}/Contents/MacOS/bin
       VERBATIM
